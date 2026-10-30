@@ -72,6 +72,11 @@ button,input,select,textarea{font:inherit; color:inherit}
 .ke-payroll:hover{border-color:var(--payroll)}
 .ke-payroll .pr-dot{width:8px; height:8px; border-radius:50%; background:var(--payroll)}
 .ke-payroll .pr-arrow{margin-left:auto; opacity:.7}
+.ke-payroll[hidden]{display:none}
+.ke-raksa{display:flex; align-items:center; gap:8px; padding:7px 8px; margin-top:4px; color:var(--ink3); font-size:13px; cursor:default}
+.ke-raksa .pr-soon{margin-left:auto; font-size:10px; letter-spacing:.08em; text-transform:uppercase; border:1px dashed var(--line2); border-radius:999px; padding:1px 7px}
+.pilih-usaha{margin-top:10px; width:100%; font:inherit; font-size:13px; padding:6px 8px; border-radius:6px;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink)}
 .nav button:hover{background:var(--surface2); color:var(--ink)}
 .nav button[aria-current="true"]{background:var(--accent-soft); color:var(--accent); font-weight:600}
 .nav .cnt{font-size:11px; color:var(--ink3); font-family:"IBM Plex Mono",monospace}
@@ -498,15 +503,17 @@ dialog .db{max-height:min(70vh,620px); overflow-y:auto}
     <div class="brand">
       <span class="mark">SELLER FIN TECH</span>
       <span class="sub">Pembukuan E-Commerce</span>
+      <select id="pilih-usaha" class="pilih-usaha" hidden aria-label="Pilih usaha"></select>
     </div>
     <div class="navgroup"><span class="lbl">Ringkasan</span><div class="nav" id="nav-a"></div></div>
     <div class="navgroup"><span class="lbl">Data Masuk</span><div class="nav" id="nav-b"></div></div>
     <div class="navgroup"><span class="lbl">Laporan</span><div class="nav" id="nav-c"></div></div>
     <div class="navgroup"><span class="lbl">Katalog</span><div class="nav" id="nav-e"></div></div>
     <div class="navgroup"><span class="lbl">Pengaturan</span><div class="nav" id="nav-d"></div></div>
-    <div class="navgroup" id="nav-payroll" hidden><span class="lbl">Aplikasi lain</span>
-      <div class="nav"><a class="ke-payroll" href="https://payrollku-umber.vercel.app/app" title="Buka Payrollku: gaji, absensi, kasbon">
-        <span class="pr-dot"></span>Payroll<span class="pr-arrow">↗</span></a></div></div>
+    <div class="navgroup" id="nav-payroll" hidden><span class="lbl">Modul lain</span>
+      <div class="nav"><a class="ke-payroll" href="https://payrollku-umber.vercel.app/app" title="Buka Payroll: gaji, absensi, kasbon">
+        <span class="pr-dot"></span>Payroll<span class="pr-arrow">↗</span></a>
+        <span class="ke-raksa" title="Raksa akan bergabung di sini">Raksa<span class="pr-soon">segera</span></span></div></div>
   </aside>
   <div class="main">
     <header class="topbar">
@@ -1573,6 +1580,60 @@ async function use(name){
 const SB_URL = "https://huewrdenasnocclygtwv.supabase.co";
 const SB_KEY = "sb_publishable_Z3O0eB9HC7meiIcgyb7qlg_tbt6V8d5";
 
+/* Mode gabungan: halaman ini dibuka di dalam aplikasi Tanscode (Seller Fintech +
+   Payroll). Penandanya pustaka SBSSR yang hanya dimuat di sana. Di mode ini login
+   memakai cookie bersama, dan pembukuan menempel ke USAHA (company), bukan orang. */
+const GABUNGAN = /^\/seller(\/|$)/.test(location.pathname) && !/github\.io$/.test(location.hostname);
+/* Penyimpan sesi berbasis cookie, formatnya sama persis dengan @supabase/ssr yang
+   dipakai bagian Payroll (nama sb-<ref>-auth-token, isi "base64-" + base64url,
+   dipecah per 3180 karakter). Karena satu cookie dipakai bersama, cukup sekali
+   masuk untuk semua modul. Hanya dipakai di mode gabungan. */
+const KUE_SESI = (() => {
+  const MAX = 3180, PRE = "base64-";
+  const semua = () => {
+    const o = {};
+    for (const c of document.cookie.split("; ")) {
+      if (!c) continue;
+      const i = c.indexOf("=");
+      try { o[decodeURIComponent(c.slice(0, i))] = decodeURIComponent(c.slice(i + 1)); } catch(e){}
+    }
+    return o;
+  };
+  const keB64 = t => {
+    const b = new TextEncoder().encode(t); let bin = "";
+    for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  };
+  const dariB64 = t => {
+    const s = t.replace(/-/g, "+").replace(/_/g, "/"); const bin = atob(s + "===".slice((s.length + 3) % 4));
+    return new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
+  };
+  const tulis = (nama, isi, umur) => {
+    document.cookie = encodeURIComponent(nama) + "=" + encodeURIComponent(isi) + "; Path=/; Max-Age=" + umur +
+      "; SameSite=Lax" + (location.protocol === "https:" ? "; Secure" : "");
+  };
+  const potongan = (c, k) => Object.keys(c).filter(n => n.startsWith(k + ".") && /^\d+$/.test(n.slice(k.length + 1)));
+  return {
+    getItem(k){
+      const c = semua();
+      let v = c[k];
+      if (!v){ const ps = []; for (let i = 0; c[k + "." + i]; i++) ps.push(c[k + "." + i]); v = ps.join(""); }
+      if (!v) return null;
+      try { return v.startsWith(PRE) ? dariB64(v.slice(PRE.length)) : v; } catch(e){ return null; }
+    },
+    setItem(k, nilai){
+      const isi = PRE + keB64(nilai), c = semua();
+      if (isi.length <= MAX){ tulis(k, isi, 34560000); potongan(c, k).forEach(n => tulis(n, "", 0)); return; }
+      if (c[k] !== undefined) tulis(k, "", 0);
+      const n = Math.ceil(isi.length / MAX);
+      for (let i = 0; i < n; i++) tulis(k + "." + i, isi.slice(i * MAX, (i + 1) * MAX), 34560000);
+      potongan(c, k).filter(x => +x.slice(k.length + 1) >= n).forEach(x => tulis(x, "", 0));
+    },
+    removeItem(k){ const c = semua(); if (c[k] !== undefined) tulis(k, "", 0); potongan(c, k).forEach(n => tulis(n, "", 0)); },
+  };
+})();
+const HAK_GABUNG = { input:"seller_input", laporan:"seller_laporan", pengaturan:"seller_pengaturan",
+                     hapus:"seller_pengaturan", pengguna:"pengguna" };
 let SB = null;          // klien Supabase
 let AKUN = null;        // { id, email, usaha }
 let PEMULIHAN = false;  // halaman dibuka lewat tautan "atur ulang kata sandi"
@@ -1858,7 +1919,8 @@ async function masuk(user, usahaBaru){
            usaha: usahaBaru || meta.usaha || "",
            peran: meta.peran || "pemilik", induk: meta.induk || user.id };
   gerbang(null, kartuMemuat("Mengambil pembukuan Anda…"));
-  if (LANGGANAN.aktif) await bacaPaket();
+  if (GABUNGAN && !(await pilihUsaha())) return;
+  if (LANGGANAN.aktif && !GABUNGAN) await bacaPaket();
   await muatBuku(usahaBaru);
   cekAksesPayroll();
   document.getElementById("gate").hidden = true;
@@ -1870,7 +1932,38 @@ async function masuk(user, usahaBaru){
    cadangan bersama itu membuat buku satu akun terbuka — bahkan tertulis — di
    akun lain. Kunci lama "bbl:book" dari masa sebelum Supabase sengaja tidak
    pernah dibaca lagi; isinya sudah terangkat ke akun yang pertama memakainya. */
-const cacheKunci = () => "bbl:book:" + (AKUN ? (AKUN.induk || AKUN.id) : "tamu");
+const cacheKunci = () => "bbl:book:" + (AKUN ? (GABUNGAN ? "co:" + AKUN.usahaId : (AKUN.induk || AKUN.id)) : "tamu");
+/* Mode gabungan: ambil daftar usaha yang boleh dibuka akun ini beserta haknya.
+   Usaha terakhir yang dibuka diingat per perangkat. */
+async function pilihUsaha(){
+  let daftar = [];
+  try {
+    const { data, error } = await SB.rpc("seller_konteks");
+    if (error) throw error;
+    daftar = (data || []).filter(u => (u.hak || []).some(h => /^seller_/.test(h)));
+  } catch(e){ gerbang(null, kartuGagal(pesanGalat(e))); return false; }
+  if (!daftar.length){
+    gerbang(null, `<h2>Belum ada akses Seller Fintech</h2>
+      <p class="gsub">Akun ${esc(AKUN.email)} belum diberi hak membuka pembukuan usaha mana pun.
+      Minta pemilik usaha menambahkan hak <strong>Seller Fintech</strong> ke peran Anda.</p>
+      <a class="btn primary" href="/mulai">Kembali</a>`);
+    return false;
+  }
+  let ingat = ""; try { ingat = localStorage.getItem("sft:usaha:" + AKUN.id) || ""; } catch(e){}
+  const u = daftar.find(x => x.company_id === ingat) || daftar.find(x => x.utama) || daftar[0];
+  AKUN.usahaId = u.company_id; AKUN.usahaNama = u.nama; AKUN.hakGabung = u.hak || [];
+  AKUN.payroll = !!u.payroll; AKUN.daftarUsaha = daftar;
+  AKUN.peran = u.peran === "owner" ? "pemilik" : "gabungan";
+  AKUN.induk = null;
+  try { localStorage.setItem("sft:usaha:" + AKUN.id, u.company_id); } catch(e){}
+  return true;
+}
+async function gantiUsaha(id){
+  if (!AKUN || id === AKUN.usahaId) return;
+  clearTimeout(saveTimer); save(); await simpanJauh();
+  try { localStorage.setItem("sft:usaha:" + AKUN.id, id); } catch(e){}
+  location.reload();
+}
 function bacaCache(){
   if (!AKUN) return null;
   try {
@@ -1894,7 +1987,9 @@ async function muatBuku(usahaBaru){
   const lokal = bacaCache();
   let jauh = null, luring = false;
   try {
-    const { data, error } = await SB.from("buku").select("data").eq("user_id", AKUN.induk || AKUN.id).maybeSingle();
+    const { data, error } = GABUNGAN
+      ? await SB.from("buku").select("data").eq("company_id", AKUN.usahaId).maybeSingle()
+      : await SB.from("buku").select("data").eq("user_id", AKUN.induk || AKUN.id).maybeSingle();
     if (error) throw error;
     jauh = (data && data.data && data.data.setup) ? data.data : null;
   } catch(e){ luring = true; }
@@ -1923,6 +2018,17 @@ async function cekAksesPayroll(){
   const el = document.getElementById("nav-payroll");
   if (el) el.hidden = true;
   if (!SB || !AKUN) return;
+  if (GABUNGAN){
+    if (el) el.hidden = false;
+    const a = el && el.querySelector(".ke-payroll");
+    if (a){ a.href = "/app"; a.hidden = !AKUN.payroll; a.removeAttribute("target"); a.querySelector(".pr-arrow").textContent = "→"; }
+    const g = document.getElementById("pilih-usaha");
+    if (g && (AKUN.daftarUsaha || []).length > 1){
+      g.hidden = false;
+      g.innerHTML = AKUN.daftarUsaha.map(u => `<option value="${esc(u.company_id)}"${u.company_id === AKUN.usahaId ? " selected" : ""}>${esc(u.nama)}</option>`).join("");
+    }
+    return;
+  }
   try {
     const { data, error } = await SB.rpc("akses_payroll");
     if (!error && data === true && el) el.hidden = false;
@@ -1941,8 +2047,10 @@ async function bacaPaket(){
 async function simpanJauh(){
   if (!SB || !AKUN) return false;
   try {
-    const { error } = await SB.from("buku")
-      .upsert({ user_id: AKUN.induk || AKUN.id, usaha: S.setup.nama, data: S }, { onConflict: "user_id" });
+    if (GABUNGAN && !boleh("input") && !boleh("pengaturan")) return true;   // pelihat: tidak menulis
+    const { error } = GABUNGAN
+      ? await SB.from("buku").upsert({ company_id: AKUN.usahaId, usaha: S.setup.nama || AKUN.usahaNama, data: S }, { onConflict: "company_id" })
+      : await SB.from("buku").upsert({ user_id: AKUN.induk || AKUN.id, usaha: S.setup.nama, data: S }, { onConflict: "user_id" });
     return !error;
   } catch(e){ return false; }
 }
@@ -1953,6 +2061,7 @@ async function keluar(){
   save();
   await simpanJauh();
   try { await SB.auth.signOut(); } catch(e){}
+  if (GABUNGAN){ location.replace("/login"); return; }
   AKUN = null; S = BLANK();
   document.getElementById("app").hidden = true;
   document.getElementById("gate").hidden = false;
@@ -1961,6 +2070,20 @@ async function keluar(){
 
 async function boot(){
   gerbang("memuat");
+  if (GABUNGAN){
+    if (!window.supabase || !window.supabase.createClient){
+      gerbang(null, kartuGagal("Pustaka Supabase gagal dimuat — biasanya karena koneksi internet terputus saat halaman dibuka."));
+      return;
+    }
+    try { SB = window.supabase.createClient(SB_URL, SB_KEY, { auth: { storage: KUE_SESI, persistSession: true,
+      autoRefreshToken: true, detectSessionInUrl: false, flowType: "pkce" } }); }
+    catch(e){ gerbang(null, kartuGagal(pesanGalat(e))); return; }
+    let sesiG = null;
+    try { const { data } = await SB.auth.getSession(); sesiG = data && data.session; } catch(e){}
+    if (!sesiG || !sesiG.user){ location.replace("/login?next=" + encodeURIComponent("/seller")); return; }
+    await masuk(sesiG.user);
+    return;
+  }
   if (!window.supabase || !window.supabase.createClient){
     gerbang(null, kartuGagal("Pustaka Supabase gagal dimuat — biasanya karena koneksi internet terputus saat halaman dibuka."));
     return;
@@ -2336,7 +2459,8 @@ function render(){
   const ak = document.getElementById("tb-akun");
   const pr = PERAN[peranSaya()] || PERAN.pemilik;
   const namaSaya = (AKUN && (AKUN.nama || AKUN.email)) || "";
-  ak.textContent = namaSaya + (peranSaya() !== "pemilik" ? " · " + pr.nama : "");
+  ak.textContent = GABUNGAN ? namaSaya + " · " + (AKUN.usahaNama || "")
+    : namaSaya + (peranSaya() !== "pemilik" ? " · " + pr.nama : "");
   ak.title = peranSaya() === "pemilik"
     ? "Pemilik akun ini: " + namaSaya
     : "Anda masuk sebagai " + pr.nama + " — " + pr.ringkas;
@@ -3848,7 +3972,7 @@ async function unggahFotoKatalog(file, nama){
   if (!SB || !AKUN) throw new Error("Masuk dulu untuk mengunggah foto.");
   if (!/^image\//.test(file.type || "")) throw new Error(file.name + " bukan berkas gambar.");
   const blob = await kecilkanGambar(file, 900, 0.82);
-  const pemilik = AKUN.induk || AKUN.id;
+  const pemilik = GABUNGAN ? AKUN.usahaId : (AKUN.induk || AKUN.id);
   const aman = String(nama || "foto").replace(/[^A-Za-z0-9._()-]+/g, "-").slice(0, 60) || "foto";
   const jalur = `${pemilik}/${aman}-${Date.now().toString(36)}.jpg`;
   const { error } = await SB.storage.from(BUCKET_KATALOG).upload(jalur, blob,
@@ -4226,7 +4350,7 @@ async function unggahLogoKatalog(file){
   if (!SB || !AKUN) throw new Error("Masuk dulu untuk mengunggah logo.");
   if (!/^image\//.test(file.type || "")) throw new Error(file.name + " bukan berkas gambar.");
   const { blob, rasio } = await siapkanLogo(file);
-  const pemilik = AKUN.induk || AKUN.id;
+  const pemilik = GABUNGAN ? AKUN.usahaId : (AKUN.induk || AKUN.id);
   const jalur = `${pemilik}/logo-${Date.now().toString(36)}.png`;
   const { error } = await SB.storage.from(BUCKET_KATALOG).upload(jalur, blob,
     { contentType:"image/png", upsert:false, cacheControl:"31536000" });
@@ -5974,7 +6098,9 @@ const HAK_JUDUL = { input:"Input & impor data", laporan:"Buka laporan keuangan",
 const peranSaya = () => (AKUN && AKUN.peran) || "pemilik";
 /* Dipanggil fitur yang kelak dibatasi. Selama sub-akun belum dinyalakan,
    semuanya dijawab boleh, jadi tidak ada perilaku yang berubah hari ini. */
-const boleh = h => !SUBAKUN.aktif || !!(PERAN[peranSaya()] || PERAN.pemilik).hak[h];
+const boleh = h => GABUNGAN
+  ? !!(AKUN && (AKUN.peran === "pemilik" || (AKUN.hakGabung || []).includes(HAK_GABUNG[h])))
+  : (!SUBAKUN.aktif || !!(PERAN[peranSaya()] || PERAN.pemilik).hak[h]);
 
 /* Kode toko milik akun ini — dibaca dari Supabase, dibuatkan server sekali saja. */
 let KODE_TOKO = "";
@@ -6032,6 +6158,13 @@ async function panggilFungsi(aksi, isi){
 }
 
 function viewPengguna(){
+  if (GABUNGAN) return head("Pengguna & Akses", "Sub-akun sekarang diatur sekali untuk semua modul (Seller Fintech, Payroll, dan nanti Raksa).") +
+    `<div class="card" style="padding:18px 20px; max-width:640px">
+      <p style="margin:0 0 10px">Tambah orang, buat peran, dan centang hak per modul — misalnya <em>Seller Fintech: input data</em>
+      tanpa akses gaji — di halaman <strong>Pengguna &amp; Akses</strong> bersama.</p>
+      <a class="btn primary" href="/app/pengaturan/pengguna">Buka Pengguna &amp; Akses →</a>
+      <p style="margin:12px 0 0; color:var(--ink3); font-size:12.5px">Halaman itu bagian dari Payroll, jadi diminta verifikasi 2 langkah.</p>
+    </div>`;
   const P = Object.entries(PERAN);
   const hakKunci = Object.keys(HAK_JUDUL);
   const matriks = `<div class="tablewrap"><table>
@@ -7509,6 +7642,7 @@ document.addEventListener("input", e => {
     if (el){ el.focus(); el.setSelectionRange(v.length, v.length); } }, 250);
 });
 document.addEventListener("change", e => {
+  if (e.target && e.target.id === "pilih-usaha"){ gantiUsaha(e.target.value); return; }
   const t = e.target;
   if (t.dataset.jc){
     const [i,f] = t.dataset.jc.split(":");
