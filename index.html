@@ -2054,8 +2054,8 @@ async function cekAksesPayroll(){
   if (GABUNGAN){
     if (el) el.hidden = false;
     const br = el && el.querySelector(".ke-beranda"); if (br) br.hidden = false;
-    const rk = document.getElementById("ke-raksa"); if (rk) rk.hidden = !AKUN.raksa;
-    const iv = document.getElementById("ke-invoice"); if (iv) iv.hidden = !AKUN.invoice;
+    const rk = document.getElementById("ke-raksa"); if (rk){ rk.hidden = !AKUN.raksa; rk.href = "/raksa"; }
+    const iv = document.getElementById("ke-invoice"); if (iv){ iv.hidden = !AKUN.invoice; iv.href = "/invoice"; }
     const a = el && el.querySelector(".ke-payroll");
     if (a){ a.href = "/app"; a.hidden = !AKUN.payroll; a.removeAttribute("target"); }
     mulaiCekVersi();
