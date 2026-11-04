@@ -2157,7 +2157,7 @@ function save(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     const ok = await simpanJauh();
-    note(ok ? "Tersimpan " + new Date().toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit" })
+    note(ok ? "Tersimpan " + new Date().toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit", hourCycle:"h23", timeZone:"Asia/Jakarta" }) + " WIB"
             : "Belum tersimpan ke server — akan dicoba lagi saat Anda mengubah sesuatu");
   }, 700);
 }
@@ -4301,7 +4301,7 @@ function viewKatalogSet(){
     ${teks("brand", "Nama toko / brand", "Judul besar di sampul", S.setup.nama)}
     ${teks("sub", "Sub judul", "Di sampul dan kaki halaman", "KATALOG PRODUK")}
     ${teks("eyebrow", "Label kecil di atas sampul", "", "KOLEKSI TERBARU")}
-    ${teks("edisi", "Edisi", "Ganti tiap kali memperbarui katalog", "EDISI " + new Date().toLocaleDateString("id-ID", { month:"long", year:"numeric" }).toUpperCase())}
+    ${teks("edisi", "Edisi", "Ganti tiap kali memperbarui katalog", "EDISI " + new Date().toLocaleDateString("id-ID", { month:"long", year:"numeric", timeZone:"Asia/Jakarta" }).toUpperCase())}
     <div class="field" style="grid-column:span 2"><label>Logo</label>
       <div class="ktlogo">
         <div class="ktlogo-pv">${k.logo
@@ -6767,7 +6767,7 @@ function buatPdf(o){
   hal.push(buf);
 
   /* nomor halaman */
-  const cap = new Date().toLocaleString("id-ID", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+  const cap = new Date().toLocaleDateString("id-ID", { day:"2-digit", month:"2-digit", year:"numeric", timeZone:"Asia/Jakarta" }) + " " + new Date().toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit", hourCycle:"h23", timeZone:"Asia/Jakarta" }) + " WIB";
   hal.forEach((b, i) => {
     const yy = MB - 14;
     b.push(`0.5 0.5 0.5 rg BT /F1 7.5 Tf 1 0 0 1 ${ML} ${yy} Tm (${pdfEsc((o.kaki || "") + (o.kaki ? "  |  " : "") + "Dicetak " + cap)}) Tj ET`);
