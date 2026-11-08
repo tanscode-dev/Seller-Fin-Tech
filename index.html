@@ -2058,18 +2058,23 @@ function kelompokInvoice(){
 }
 function terapkanBeliInvoice(d){
   if (!d) return false;
-  const g = kelompokInvoice();
-  const o0 = String((g && g.outlets[0]) || "shopee|").split("|");
-  const o = { plat: o0[0] || "shopee", toko: o0[1] || "" }, kel = g ? g.id : undefined;
+  const K = petaKelompok(), gDef = kelompokInvoice();
+  const tujuan = id => {
+    const g = K.byId.get(id) || gDef;
+    const o0 = String((g && g.outlets[0]) || "shopee|").split("|");
+    return { plat: o0[0] || "shopee", toko: o0[1] || "", kel: g ? g.id : undefined };
+  };
   const lamaB = S.beli.filter(DARI_INV), lamaJ = S.jurnal.filter(DARI_INV);
   const beli = [], jurnal = [];
   for (const f of (d.beli || [])) for (const b of (f.baris || [])){
+    const o = tujuan(f.kelompok), kel = o.kel;
     const qty = Math.round(num(b.qty)), nilai = Math.round(num(b.nilai));
     const harga = qty > 0 ? Math.round(nilai / qty) : 0;
     beli.push({ tgl: f.tgl, faktur: f.faktur, supplier: f.supplier || "", sku: String(b.sku || ""), qty, harga,
       biayaLain: nilai - qty * harga, bayar: "Utang", plat: o.plat, toko: o.toko, kelompok: kel, sumber: "invoice", invId: f.id });
   }
   for (const p of (d.bayar || [])){
+    const o = tujuan(p.kelompok), kel = o.kel;
     const akun = String(p.metode || "").toLowerCase() === "tunai" || String(p.metode || "").toLowerCase() === "cash" ? "1-100" : "1-110";
     jurnal.push({ tgl: p.tgl, ket: "Pelunasan utang " + (p.supplier || "") + " · " + (p.faktur || ""), plat: o.plat, toko: o.toko, kelompok: kel,
       sumber: "invoice", invId: p.id, baris: [{ kode: "2-100", d: Math.round(num(p.jumlah)), k: 0 }, { kode: akun, d: 0, k: Math.round(num(p.jumlah)) }] });
@@ -2080,8 +2085,29 @@ function terapkanBeliInvoice(d){
   S.jurnal = S.jurnal.filter(x => !DARI_INV(x)).concat(jurnal);
   return true;
 }
+async function muatKelompokDb(){
+  try {
+    const { data, error } = await SB.from("kelompok_usaha").select("id,nama,outlets,urut").eq("company_id", AKUN.usahaId).eq("aktif", true).order("urut");
+    if (error) return;
+    if (data && data.length){
+      const L = data.map(g => ({ id: g.id, nama: g.nama, outlets: Array.isArray(g.outlets) ? g.outlets : [] }));
+      if (JSON.stringify(L) !== JSON.stringify(S.setup.kelompok || null)) S.setup.kelompok = L;
+    } else if (boleh("pengaturan")) {
+      await SB.rpc("simpan_kelompok_usaha", { p_company: AKUN.usahaId, p_list: daftarKelompok() });
+    }
+  } catch(e){}
+}
+async function simpanKelompokDb(){
+  if (!GABUNGAN || !SB || !AKUN || !AKUN.usahaId) return true;
+  try {
+    const { error } = await SB.rpc("simpan_kelompok_usaha", { p_company: AKUN.usahaId, p_list: daftarKelompok() });
+    if (error){ note("Kelompok belum tersimpan ke server: " + (error.message || "")); return false; }
+    return true;
+  } catch(e){ return false; }
+}
 async function muatBeliInvoice(){
   if (!GABUNGAN || !SB || !AKUN || !AKUN.usahaId) return;
+  await muatKelompokDb();
   try {
     const { data, error } = await SB.rpc("seller_pembelian_invoice", { p_company: AKUN.usahaId });
     if (error || !data) return;
@@ -4836,10 +4862,11 @@ function viewBeli(){
     return html;
   }).join("");
   const nInv = new Set(S.beli.filter(DARI_INV).map(x => x.invId)).size;
-  const gInv = kelompokInvoice();
+  const perKel = new Map();
+  for (const x of S.beli) if (DARI_INV(x)) { const g = kelompokBaris(x); const n = g ? g.nama : "—"; (perKel.get(n) || perKel.set(n, new Set()).get(n)).add(x.invId); }
   const panelInv = GABUNGAN ? `<div class="status" style="margin:0 0 12px">Dari Invoice Manager: <strong>${nInv}</strong> invoice terposting
-      · milik <select id="beli-kelinv" style="width:auto">${daftarKelompok().map(g => `<option value="${esc(g.id)}"${gInv && g.id === gInv.id ? " selected" : ""}>${esc(g.nama)}</option>`).join("")}</select>
-      (dipakai bersama semua toko di kelompok ini)
+      ${[...perKel].map(([n, set]) => ` · ${esc(n)}: ${set.size}`).join("")}
+      — kelompok dipilih per invoice di Invoice Manager; stok dipakai bersama semua toko di kelompoknya.
       <button class="btn ghost" id="beli-seginv">Segarkan</button></div>` : "";
 
   return `
@@ -5323,7 +5350,7 @@ function aturKelompok(semua, kembali){
       S.setup.kelompok = L.map(g => ({ id: g.id, nama: String(g.nama || "").trim() || "Tanpa nama", outlets: [...new Set(g.outlets)] }));
       if (!S.setup.kelompok.some(g => g.id === S.setup.kelompokInvoice)) delete S.setup.kelompokInvoice;
       if (INV_TERAKHIR) terapkanBeliInvoice(INV_TERAKHIR);
-      save(); kembali();
+      save(); simpanKelompokDb(); kembali();
     };
   };
   document.getElementById("dlg-t").textContent = "Atur kelompok usaha (CV/PT)";
@@ -8079,7 +8106,6 @@ document.addEventListener("change", e => {
   if (t.id === "ak-metode"){ (S.ui ||= {}).akMetode = t.value; touch(); return; }
   if (t.id === "lr-banding"){ (S.ui ||= {}).banding = t.value === "0" ? false : t.value; touch(); return; }
   if (t.id === "lr-mode"){ lrState().mode = t.value; touch(); return; }
-  if (t.id === "beli-kelinv"){ S.setup.kelompokInvoice = t.value; if (INV_TERAKHIR) terapkanBeliInvoice(INV_TERAKHIR); touch(); return; }
   if (t.id === "bb-akun"){ (S.ui ||= {}).bbAkun = t.value; touch(); return; }
   if (t.id === "bb-rinci"){ (S.ui ||= {}).bbRinci = t.value; touch(); return; }
   if (t.id === "lr-bulan"){ lrState().bulan = t.value; touch(); return; }
