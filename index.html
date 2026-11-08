@@ -520,7 +520,6 @@ dialog .db{max-height:min(70vh,620px); overflow-y:auto}
     <div class="navgroup"><span class="lbl">Ringkasan</span><div class="nav" id="nav-a"></div></div>
     <div class="navgroup"><span class="lbl">Data Masuk</span><div class="nav" id="nav-b"></div></div>
     <div class="navgroup"><span class="lbl">Laporan</span><div class="nav" id="nav-c"></div></div>
-    <div class="navgroup"><span class="lbl">Katalog</span><div class="nav" id="nav-e"></div></div>
     <div class="navgroup"><span class="lbl">Pengaturan</span><div class="nav" id="nav-d"></div></div>
   </aside>
   <div class="main">
@@ -1228,6 +1227,12 @@ function hitungPenyusutan(m, a){
    salah satu berubah hitungannya diulang dari nol. Empat hasil terakhir disimpan;
    lebih dari itu tidak berguna karena orang jarang bolak-balik lebih jauh. */
 const HASIL = new Map();
+/* Buku Besar: saat BB_LOG berisi array, setiap posting ikut dicatat beserta tanggal &
+   keterangan transaksinya (BB_KTX). Di luar Buku Besar keduanya null → tanpa biaya. */
+let BB_LOG = null, BB_KTX = null;
+const bbKet = (label, x) => [label, x && (x.no || x.ref || x.nomor || x.sku || x.ket || x.keterangan || x.nama || x.uraian), x && x.toko]
+  .filter(Boolean).map(String).join(" · ");
+const bbSet = (t, ket) => { if (BB_LOG) BB_KTX = { t, ket }; };
 function compute(m, a){
   const kunci = [S.ts || 0, pilihList().join(","), S.setup.mulai, S.setup.akhir, m || "", a || ""].join("|");
   if (HASIL.has(kunci)) return HASIL.get(kunci);
@@ -1244,7 +1249,8 @@ function hitungBuku(m, a){
   const A = {};
   const add = (k, d, c) => { if (!k) return;
     if (!NAMA[k]) k = "7-180";      // kode asing tetap masuk laporan, bukan hilang diam-diam
-    (A[k] ||= { d:0, c:0 }); A[k].d += d||0; A[k].c += c||0; };
+    (A[k] ||= { d:0, c:0 }); A[k].d += d||0; A[k].c += c||0;
+    if (BB_LOG && (d || c)) BB_LOG.push({ k, d: d||0, c: c||0, t: BB_KTX ? BB_KTX.t : batasAkhir, ket: BB_KTX ? BB_KTX.ket : "" }); };
   const kasAkun = t => t === "Kas" ? "1-100" : t === "Bank" ? "1-110" : t === "Utang" ? "2-100" : null;
   const piutang = x => PIUTANG_AKUN[x && x.plat] || "1-120";
   const modal = petaModal();
@@ -1252,6 +1258,7 @@ function hitungBuku(m, a){
   const ppnPart = x => r ? x * r / (1 + r) : 0;
 
   for (const [k] of COA) add(k, 0, 0);
+  bbSet(batasMulai, "Saldo awal");
   for (const [k, v] of Object.entries(S.saldoAwal)) add(k, num(v.d), num(v.k));
   /* potret setelah saldo awal: selisihnya nanti = mutasi periode saja,
      yang dipakai Arus Kas metode tidak langsung. */
@@ -1263,6 +1270,7 @@ function hitungBuku(m, a){
 
   for (const x of S.income){
     if (!pakai(x)) continue;
+    bbSet(x.tgl, bbKet("Pencairan " + (x.plat || ""), x));
     const disc = num(x.diskon) + num(x.voucher) + num(x.koin);
     const f = num(x.adm)+num(x.layanan)+num(x.program)+num(x.proses)+num(x.ongkir)
             + num(x.komisi)+num(x.iklanAuto)+num(x.lainnya);
@@ -1322,6 +1330,7 @@ function hitungBuku(m, a){
   for (const x of (S.manual || [])) if (pakai(x))
     omzetBasis += num(x.qty) * num(x.harga) - num(x.diskon);
   let pphTerutang = 0, pphDikredit = 0;
+  bbSet(batasAkhir, "PPh Final periode " + fmtD(batasMulai) + "–" + fmtD(batasAkhir));
   if (S.setup.pphAktif){
     pphTerutang = dasarKena * num(S.setup.tarifPph);
     add("9-100", pphTerutang, 0); add("2-130", 0, pphTerutang);
@@ -1350,6 +1359,7 @@ function hitungBuku(m, a){
     const tAkui = tglAkuiPesanan(x, AK);
     if (!inPeriod(tAkui) || !inToko(x)) continue;
     const h = hppBaris(x, tAkui);
+    bbSet(tAkui, bbKet("HPP pesanan", x));
     add("5-100", h, 0); add("1-140", 0, h);
     bulanan[monthOf(tAkui)-1].hpp += h;
     hppDiakui += h; jualDiakui += num(x.qty) * num(x.harga);
@@ -1361,6 +1371,7 @@ function hitungBuku(m, a){
     const bruto = num(x.qty) * num(x.harga), disk = num(x.diskon);
     if (!bruto && !disk) continue;
     const ppnK = ppnPart(bruto);
+    bbSet(x.tgl, bbKet("Penjualan manual", x));
     add(x.bayar === "Piutang" ? "1-130" : x.bayar === "Bank" ? "1-110" : "1-100", bruto - disk, 0);
     if (disk) add("4-200", disk, 0);
     add("4-100", 0, bruto - ppnK);
@@ -1392,6 +1403,7 @@ function hitungBuku(m, a){
       st.hpp += h;
       /* harga pokoknya keluar dari HPP karena penjualannya batal;
          tujuannya persediaan bila barang kembali, kerugian bila tidak. */
+      bbSet(rt.tgl, bbKet("Retur", rt));
       add(rt.status === "kembali" ? "1-140" : "7-190", h, 0);
       add("5-100", 0, h);
       hppRetur += h;
@@ -1403,17 +1415,20 @@ function hitungBuku(m, a){
   for (const x of S.adjust){
     if (!pakai(x)) continue;
     const v = num(x.jumlah);
+    bbSet(x.tgl, bbKet("Penyesuaian", x));
     const k = x.kode || (v >= 0 ? "8-100" : "4-300");
     if (v >= 0){ add(piutang(x), v, 0); add(k, 0, v); if (k === "8-100") lainPenyesuaian += v; }
     else { add(piutang(x), 0, -v); add(k, -v, 0); if (k === "4-300") returPenyesuaian += -v; }
   }
   for (const x of S.iklan){
     if (!pakai(x)) continue;
+    bbSet(x.tgl, bbKet("Iklan", x));
     add("6-150", num(x.biaya), 0); add(isSaldoMp(x.sumber) ? piutang(x) : (kasAkun(x.sumber) || piutang(x)), 0, num(x.biaya));
     bulanan[monthOf(x.tgl)-1].iklan += num(x.biaya);
   }
   for (const x of S.saldo){
     if (!pakai(x)) continue;
+    bbSet(x.tgl, bbKet("Tarik saldo ke " + (x.ke || "Bank"), x));
     add(x.ke === "Kas" ? "1-100" : "1-110", num(x.jumlah) - num(x.biaya), 0);
     add("7-150", num(x.biaya), 0);
     add(piutang(x), 0, num(x.jumlah));
@@ -1421,6 +1436,7 @@ function hitungBuku(m, a){
   for (const x of S.beli){
     if (!pakai(x)) continue;
     const barang = num(x.qty) * num(x.harga), tot = barang + num(x.biayaLain), pm = ppnPart(barang);
+    bbSet(x.tgl, bbKet("Pembelian", x));
     add("1-150", pm, 0);
     add(kasAkun(x.bayar) || "1-110", 0, tot);
     if (rata){
@@ -1439,6 +1455,7 @@ function hitungBuku(m, a){
   for (const x of S.aset){
     if (!inToko(x)) continue;
     if (inPeriod(x.tgl) && x.bayar !== "Sudah dicatat terpisah"){
+      bbSet(x.tgl, bbKet("Perolehan aset", x));
       add(x.akun || "1-200", num(x.harga), 0);
       add(kasAkun(x.bayar) || "1-110", 0, num(x.harga));
     }
@@ -1447,6 +1464,7 @@ function hitungBuku(m, a){
     const PY = hitungPenyusutan(batasMulai, batasAkhir);
     for (const d of PY.hasil){
       if (!inToko(d.as) || !(d.komPeriode > 0)) continue;
+      bbSet(batasAkhir, bbKet("Penyusutan", d.as));
       add("7-160", d.komPeriode, 0);
       add(AKUM_OF[d.as.akun || "1-200"] || "1-210", 0, d.komPeriode);
     }
@@ -1454,16 +1472,19 @@ function hitungBuku(m, a){
 
   for (const x of S.pajak){
     if (!pakai(x)) continue;
+    bbSet(x.tgl, bbKet("Setoran pajak", x));
     add(x.jenis || "2-130", num(x.jumlah), 0);
     add(kasAkun(x.bayar) || "1-110", 0, num(x.jumlah));
   }
   for (const x of S.ops){
     if (!pakai(x)) continue;
+    bbSet(x.tgl, bbKet("Biaya operasional", x));
     add(x.kode, num(x.jumlah), 0); add(isSaldoMp(x.bayar) ? piutang(x) : (kasAkun(x.bayar) || "1-100"), 0, num(x.jumlah));
     bulanan[monthOf(x.tgl)-1].ops += num(x.jumlah);
   }
   for (const x of S.jurnal){
     if (!pakai(x)) continue;
+    bbSet(x.tgl, bbKet("Jurnal manual", x));
     for (const l of jurnalBaris(x)) add(l.kode, num(l.d), num(l.k));
   }
 
@@ -2449,8 +2470,7 @@ const NAV = [
   ["c","cutoff","Tutup Buku (Cut-off)"],
   ["c","fiskal","Rekonsiliasi Fiskal"],
   ["c","neracasaldo","Neraca Saldo"],
-  ["e","katalog","Katalog Produk"],
-  ["e","katalogSet","Pengaturan Katalog"],
+  ["c","bukubesar","Buku Besar"],
   ["d","produk","Master Produk"],
   ["d","resep","Resep SKU Kombinasi"],
   ["d","varian","Variasi Produk"],
@@ -2464,7 +2484,7 @@ let page = "ringkasan";
    yang sudah masuk. Ini lapis kenyamanan; penjagaan yang sebenarnya ada di RLS. */
 const NAV_HAK = {
   ringkasan:"laporan", labarugi:"laporan", neraca:"laporan", aruskas:"laporan",
-  rekon:"laporan", cutoff:"laporan", fiskal:"laporan", neracasaldo:"laporan",
+  rekon:"laporan", cutoff:"laporan", fiskal:"laporan", neracasaldo:"laporan", bukubesar:"laporan",
   akun:"pengaturan", setup:"pengaturan", pengguna:"pengguna", paket:"pengguna",
   income:"input", order:"input", adjust:"input", mutasi:"input", iklan:"input", manual:"input",
   saldo:"input", beli:"input", ops:"input", aset:"input", pajak:"input", jurnal:"input",
@@ -2474,7 +2494,7 @@ const bolehHalaman = id => !NAV_HAK[id] || boleh(NAV_HAK[id]);
 const halamanPertama = () => boleh("laporan") ? "ringkasan" : boleh("input") ? "income" : "labarugi";
 
 function renderNav(){
-  for (const g of ["a","b","c","e","d"]){
+  for (const g of ["a","b","c","d"]){
     document.getElementById("nav-"+g).innerHTML = NAV.filter(n => n[0]===g && bolehHalaman(n[1])).map(([,id,label]) => {
       const c = TABLES[id] ? `<span class="cnt">${S[id].length}</span>` : "";
       return `<button data-nav="${id}" aria-current="${page===id}">${esc(label)}${c}</button>`;
@@ -2518,10 +2538,9 @@ function render(){
     : TABLES[page] ? viewTable(page) : ({
     ringkasan: () => viewRingkasan(R), labarugi: () => viewLabaRugi(),
     neraca: () => viewNeraca(), aruskas: () => viewArusKas(),
-    neracasaldo: () => viewNeracaSaldo(R), rekon: () => viewRekon(R), cutoff: () => viewCutoff(R),
+    neracasaldo: () => viewNeracaSaldo(R), bukubesar: () => viewBukuBesar(), rekon: () => viewRekon(R), cutoff: () => viewCutoff(R),
     fiskal: () => viewFiskal(),
     akun: () => viewAkun(R), setup: () => viewSetup(), paket: () => viewPaket(), pengguna: () => viewPengguna(),
-    katalogSet: () => viewKatalogSet(),
   }[page])();
   if (page === "ringkasan") drawCharts(R);
 }
@@ -6057,6 +6076,71 @@ function viewNeracaSaldo(R){
        <td class="calc"><strong>${rp(R.totD)}</strong></td><td class="calc"><strong>${rp(R.totK)}</strong></td></tr></tfoot>
    </table></div>`;
 }
+/* ---------- Buku Besar ----------
+   Rincian setiap posting per akun: saldo awal periode, mutasi debit/kredit per
+   transaksi (tanggal & keterangan), dan saldo berjalan. Angkanya dari mesin yang
+   sama dengan Neraca Saldo, jadi saldo akhirnya selalu sama. */
+function bukuBesarData(kode, dari, sampai){
+  const sebelum = d => { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() - 1); return t.toISOString().slice(0,10); };
+  let awal = 0;
+  if (dari > S.setup.mulai){
+    const R0 = hitungBuku(S.setup.mulai, sebelum(dari));
+    awal = R0.A[kode] ? R0.A[kode].d - R0.A[kode].c : 0;
+  }
+  BB_LOG = []; BB_KTX = null;
+  let log;
+  try { hitungBuku(dari, sampai); log = BB_LOG; } finally { BB_LOG = null; BB_KTX = null; }
+  const baris = [];
+  for (const e of log){
+    if (e.k !== kode) continue;
+    if (e.ket === "Saldo awal"){ if (dari <= S.setup.mulai) awal += e.d - e.c; continue; }
+    baris.push(e);
+  }
+  baris.sort((a,b) => a.t < b.t ? -1 : a.t > b.t ? 1 : 0);
+  return { awal, baris };
+}
+function viewBukuBesar(){
+  const [dari, sampai] = rentangLaporan();
+  const ui = S.ui || {};
+  const aktif = COA.filter(([k]) => { const a = (compute(dari, sampai).A || {})[k]; return a && (a.d || a.c); });
+  const kode = ui.bbAkun && COA.some(([k]) => k === ui.bbAkun) ? ui.bbAkun : (aktif[0] || COA[0])[0];
+  const nama = (COA.find(([k]) => k === kode) || [kode, kode])[1];
+  const { awal, baris } = bukuBesarData(kode, dari, sampai);
+  const MAKS = 3000;
+  const rinci = ui.bbRinci || (baris.length > MAKS ? "hari" : "transaksi");
+  let tampil = baris;
+  if (rinci === "hari"){
+    const m = new Map();
+    for (const e of baris){
+      const kunci = e.t + "|" + e.ket.split(" · ")[0];
+      const g = m.get(kunci) || { t: e.t, ket: e.ket.split(" · ")[0], d: 0, c: 0, n: 0 };
+      g.d += e.d; g.c += e.c; g.n++; m.set(kunci, g);
+    }
+    tampil = [...m.values()].map(g => ({ ...g, ket: g.ket + (g.n > 1 ? ` (${RE_ID.format(g.n)} transaksi)` : "") }));
+  }
+  let saldo = awal, totD = 0, totK = 0;
+  const rows = tampil.slice(0, MAKS).map(e => {
+    saldo += e.d - e.c; totD += e.d; totK += e.c;
+    return `<tr><td>${fmtD(e.t)}</td><td>${esc(e.ket)}</td><td class="calc">${e.d ? rp(e.d) : "–"}</td><td class="calc">${e.c ? rp(e.c) : "–"}</td><td class="calc">${rpS(saldo)}</td></tr>`;
+  }).join("");
+  for (const e of tampil.slice(MAKS)){ saldo += e.d - e.c; totD += e.d; totK += e.c; }
+  const pilihan = COA.map(([k,n]) => `<option value="${k}"${k===kode?" selected":""}>${k} · ${esc(n)}${aktif.some(([a]) => a===k) ? "" : " (tanpa mutasi)"}</option>`).join("");
+  return head("Buku Besar", "Rincian setiap transaksi per akun: saldo awal, mutasi debit dan kredit, dan saldo berjalan. Saldo akhirnya sama dengan Neraca Saldo. Saldo positif = debit, dalam kurung = kredit.") +
+    toolbarLaporan() +
+    `<div class="toolbar">
+      <div class="field" style="max-width:420px"><label>Akun</label><select id="bb-akun">${pilihan}</select></div>
+      <div class="field" style="max-width:220px"><label>Rincian</label><select id="bb-rinci">
+        <option value="transaksi"${rinci==="transaksi"?" selected":""}>Per transaksi</option>
+        <option value="hari"${rinci==="hari"?" selected":""}>Ringkas per hari & jenis</option></select></div>
+    </div>
+    ${tampil.length > MAKS ? `<div class="hint">Menampilkan ${RE_ID.format(MAKS)} baris pertama dari ${RE_ID.format(tampil.length)}. Pilih "Ringkas per hari & jenis" atau persempit rentang laporan. Total dan saldo akhir tetap menghitung semua baris.</div>` : ""}
+    <div class="tablewrap"><table>
+      <thead><tr><th style="width:110px">Tanggal</th><th>Keterangan</th><th class="r">Debit</th><th class="r">Kredit</th><th class="r">Saldo</th></tr></thead>
+      <tbody><tr><td>${fmtD(dari)}</td><td><strong>Saldo awal · ${esc(kode)} ${esc(nama)}</strong></td><td></td><td></td><td class="calc"><strong>${rpS(awal)}</strong></td></tr>
+      ${rows || `<tr><td colspan="5"><div class="empty">Tidak ada mutasi pada periode ini.</div></td></tr>`}</tbody>
+      <tfoot><tr><td></td><td><strong>Total mutasi & saldo akhir</strong></td><td class="calc"><strong>${rp(totD)}</strong></td><td class="calc"><strong>${rp(totK)}</strong></td><td class="calc"><strong>${rpS(saldo)}</strong></td></tr></tfoot>
+    </table></div>`;
+}
 function viewRekap(R){
   const rows = S.produk.map(p => {
     const beli = S.beli.filter(x => inPeriod(x.tgl) && x.sku === p.sku).reduce((s,x) => s + num(x.qty), 0);
@@ -7787,6 +7871,8 @@ document.addEventListener("change", e => {
   if (t.id === "ak-metode"){ (S.ui ||= {}).akMetode = t.value; touch(); return; }
   if (t.id === "lr-banding"){ (S.ui ||= {}).banding = t.value === "0" ? false : t.value; touch(); return; }
   if (t.id === "lr-mode"){ lrState().mode = t.value; touch(); return; }
+  if (t.id === "bb-akun"){ (S.ui ||= {}).bbAkun = t.value; touch(); return; }
+  if (t.id === "bb-rinci"){ (S.ui ||= {}).bbRinci = t.value; touch(); return; }
   if (t.id === "lr-bulan"){ lrState().bulan = t.value; touch(); return; }
   if (t.id === "lr-from"){ lrState().from = t.value; touch(); return; }
   if (t.id === "lr-to"){ lrState().to = t.value; touch(); return; }
