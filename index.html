@@ -2007,6 +2007,57 @@ const adaIsi = b => !!b && ["income","order","beli","ops","jurnal","produk","adj
 /* Yang dipakai: versi server, kecuali salinan lokal akun INI memang lebih baru
    (mis. Anda mengisi data saat jaringan mati). Server hanya ditulisi kalau
    barisnya belum ada, atau kalau salinan lokal akun ini yang lebih baru. */
+/* ===== Pembelian otomatis dari Invoice Manager =====
+   Invoice yang sudah DIPOSTING di Invoice Manager masuk ke Pembelian sebagai hasil:
+   satu baris per SKU dengan qty barang baik dan harga perolehan (sudah termasuk
+   ongkir, diskon, PPN). Pembayaran ke supplier masuk sebagai jurnal pelunasan utang.
+   Baris ini ditandai sumber "invoice", baca-saja, dan disegarkan setiap kali buku dimuat —
+   jadi pembatalan / perubahan di Invoice Manager ikut terbawa. */
+const DARI_INV = x => x && x.sumber === "invoice";
+let INV_TERAKHIR = null;
+function outletInvoice(){
+  const semua = daftarOutlet().filter(o => o.n > 0);
+  const pilih = S.setup.outletInvoice && semua.find(o => o.key === S.setup.outletInvoice);
+  if (pilih) return pilih;
+  const order = new Map();
+  for (const x of S.order) { const k = outletDari(x); order.set(k, (order.get(k) || 0) + 1); }
+  semua.sort((a, b) => (order.get(b.key) || 0) - (order.get(a.key) || 0));
+  return semua[0] || { key: "shopee|", plat: "shopee", toko: "" };
+}
+function terapkanBeliInvoice(d){
+  if (!d) return false;
+  const o = outletInvoice();
+  const lamaB = S.beli.filter(DARI_INV), lamaJ = S.jurnal.filter(DARI_INV);
+  const beli = [], jurnal = [];
+  for (const f of (d.beli || [])) for (const b of (f.baris || [])){
+    const qty = Math.round(num(b.qty)), nilai = Math.round(num(b.nilai));
+    const harga = qty > 0 ? Math.round(nilai / qty) : 0;
+    beli.push({ tgl: f.tgl, faktur: f.faktur, supplier: f.supplier || "", sku: String(b.sku || ""), qty, harga,
+      biayaLain: nilai - qty * harga, bayar: "Utang", plat: o.plat, toko: o.toko, sumber: "invoice", invId: f.id });
+  }
+  for (const p of (d.bayar || [])){
+    const akun = String(p.metode || "").toLowerCase() === "tunai" || String(p.metode || "").toLowerCase() === "cash" ? "1-100" : "1-110";
+    jurnal.push({ tgl: p.tgl, ket: "Pelunasan utang " + (p.supplier || "") + " · " + (p.faktur || ""), plat: o.plat, toko: o.toko,
+      sumber: "invoice", invId: p.id, baris: [{ kode: "2-100", d: Math.round(num(p.jumlah)), k: 0 }, { kode: akun, d: 0, k: Math.round(num(p.jumlah)) }] });
+  }
+  const sama = JSON.stringify(lamaB) === JSON.stringify(beli) && JSON.stringify(lamaJ) === JSON.stringify(jurnal);
+  if (sama) return false;
+  S.beli = S.beli.filter(x => !DARI_INV(x)).concat(beli);
+  S.jurnal = S.jurnal.filter(x => !DARI_INV(x)).concat(jurnal);
+  return true;
+}
+async function muatBeliInvoice(){
+  if (!GABUNGAN || !SB || !AKUN || !AKUN.usahaId) return;
+  try {
+    const { data, error } = await SB.rpc("seller_pembelian_invoice", { p_company: AKUN.usahaId });
+    if (error || !data) return;
+    INV_TERAKHIR = data;
+    if (terapkanBeliInvoice(data)){
+      if (boleh("input") || boleh("pengaturan")) save(); else { segarkanPeta(); HASIL.clear(); REKAP.clear(); }
+      render();
+    }
+  } catch(e){}
+}
 async function muatBuku(usahaBaru){
   S = BLANK();
   const pakai = b => {
@@ -2036,6 +2087,7 @@ async function muatBuku(usahaBaru){
     await simpanJauh();
     note(!jauh && adaIsi(S) ? "Pembukuan perangkat ini diangkat ke server" : "Tersimpan di server");
   } else note("Tersinkron dengan server");
+  muatBeliInvoice();
 }
 /* Status langganan akun ini. Hanya dibaca kalau langganan sudah dinyalakan,
    jadi selama masih rancangan tidak ada permintaan tambahan ke server sama
@@ -4667,7 +4719,9 @@ function viewBeli(){
         <td class="calc" style="color:var(--ink3)">${lama ? rp(lama) : "—"}</td>
         <td style="width:34px"><button class="rowdel" data-bdel="${i}" title="Hapus baris">&times;</button></td></tr>`;
     }).join("");
-    return `<div class="card" style="margin-bottom:14px"><div class="bd">
+    const inv = g.baris.some(b => DARI_INV(b.x));
+    let html = `<div class="card" style="margin-bottom:14px"><div class="bd">
+      ${inv ? `<div class="status" style="margin-bottom:8px;color:var(--ink3)">🔒 Otomatis dari Invoice Manager — ubah atau batalkan di Invoice Manager; di sini hanya hasilnya (qty barang baik & harga perolehan termasuk ongkir/diskon/PPN).</div>` : ""}
       <div class="grid2" style="margin-bottom:10px">
         <div class="field" style="max-width:150px"><label>Tanggal</label>
           <input type="date" data-bg="${gi}:tgl" value="${esc(g.tgl)}"></div>
@@ -4699,7 +4753,17 @@ function viewBeli(){
         <button class="btn danger" data-bdelinv="${gi}">Hapus faktur</button>
       </div>
     </div></div>`;
+    if (inv) html = html.replace(/<(input|select)\b/g, "<$1 disabled")
+      .replace(/<button class="btn" data-badd="\d+">[^<]*<\/button>/, "")
+      .replace(/<button class="btn danger" data-bdelinv="\d+">[^<]*<\/button>/, "")
+      .replace(/<button class="rowdel"[^>]*>&times;<\/button>/g, "");
+    return html;
   }).join("");
+  const nInv = new Set(S.beli.filter(DARI_INV).map(x => x.invId)).size;
+  const outs = daftarOutlet().filter(o => o.n > 0), oInv = outletInvoice();
+  const panelInv = GABUNGAN ? `<div class="status" style="margin:0 0 12px">Dari Invoice Manager: <strong>${nInv}</strong> invoice terposting
+      · masuk ke toko <select id="beli-outletinv" style="width:auto">${outs.map(o => `<option value="${esc(o.key)}"${o.key === oInv.key ? " selected" : ""}>${esc(labelOutlet(o))}</option>`).join("")}</select>
+      <button class="btn ghost" id="beli-seginv">Segarkan</button></div>` : "";
 
   return `
   <div class="pagehead"><h1>Pembelian Persediaan</h1>
@@ -4715,6 +4779,7 @@ function viewBeli(){
     <span class="status">${G.length} faktur · ${S.beli.filter(inToko).length} baris</span>
     <button class="btn ghost" id="beli-mentah">Data mentah</button>
   </div>
+  ${panelInv}
   ${panelUsulan()}
   ${G.length ? kartu : `<div class="tablewrap"><div class="empty">Belum ada pembelian.
     Tekan <strong>+ Faktur baru</strong> lalu isi SKU yang Anda beli beserta qty dan harganya.</div></div>`}
@@ -7509,6 +7574,7 @@ document.addEventListener("click", async e => {
   if (t.id === "tb-outlet" || t.id === "sku-outlet"){ bukaPilihToko(); return; }
   if (t.id === "sku-mentah"){ mentah = !mentah; render(); return; }
   if (t.id === "beli-mentah"){ mentahBeli = !mentahBeli; render(); return; }
+  if (t.id === "beli-seginv"){ muatBeliInvoice().then(() => note("Pembelian dari Invoice Manager disegarkan")); return; }
   if (t.id === "resep-mentah"){ mentahResep = !mentahResep; render(); return; }
   if (t.id === "resep-tpl"){ await unduhTemplateResep(); return; }
   if (t.id === "resep-baru"){ draftBaru(""); return; }
@@ -7871,6 +7937,7 @@ document.addEventListener("change", e => {
   if (t.id === "ak-metode"){ (S.ui ||= {}).akMetode = t.value; touch(); return; }
   if (t.id === "lr-banding"){ (S.ui ||= {}).banding = t.value === "0" ? false : t.value; touch(); return; }
   if (t.id === "lr-mode"){ lrState().mode = t.value; touch(); return; }
+  if (t.id === "beli-outletinv"){ S.setup.outletInvoice = t.value; if (INV_TERAKHIR) terapkanBeliInvoice(INV_TERAKHIR); touch(); return; }
   if (t.id === "bb-akun"){ (S.ui ||= {}).bbAkun = t.value; touch(); return; }
   if (t.id === "bb-rinci"){ (S.ui ||= {}).bbRinci = t.value; touch(); return; }
   if (t.id === "lr-bulan"){ lrState().bulan = t.value; touch(); return; }
