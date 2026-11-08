@@ -731,7 +731,11 @@ const adaFilter = () => pilihList().length > 0;
 const pilihSet = () => new Set(pilihList());
 /* Dipilih semua sama artinya dengan tidak menyaring apa pun. */
 function labelPilih(){
-  const P = pilihList(), semua = daftarOutlet();
+  const semua = daftarOutlet(), P = pilihList().filter(k => semua.some(o => o.key === k));
+  for (const g of daftarKelompok()){
+    const ada = g.outlets.filter(o => semua.some(x => x.key === o));
+    if (ada.length && ada.length < semua.length && ada.length === P.length && ada.every(o => P.includes(o))) return g.nama;
+  }
   if (!P.length || P.length >= semua.length) return "Semua toko";
   const ada = semua.filter(o => P.includes(o.key));
   if (ada.length === 1) return labelOutlet(ada[0]);
@@ -788,7 +792,7 @@ function modalBaris(x, V, M, RES){
    1.600 produk dan 13.600 pesanan itu 20 juta perbandingan tiap kali layar
    digambar. Sekarang petanya dibangun sekali per gambar-ulang (lihat segarkanPeta). */
 let PETA_KODE = null, PUNYA_SKU_SET = null, SIMPANAN = {};
-function segarkanPeta(){ PETA_KODE = null; PUNYA_SKU_SET = null; SIMPANAN = {}; }
+function segarkanPeta(){ PETA_KODE = null; PUNYA_SKU_SET = null; SIMPANAN = {}; BELI_SET = new WeakSet(S.beli); }
 /* Peta varian, resep, dan harga modal dibangun ulang tiap kali dipanggil — dan
    kolom "Total HPP" memanggilnya sekali per baris. Dengan 13.600 baris itu berarti
    13.600 kali membangun peta yang isinya sama persis. Simpanan ini membuatnya
@@ -857,7 +861,40 @@ const daftarToko = () => {
 const tokoAktif = () => { const P = pilihList(); if (!P.length) return "";
   const tk = [...new Set(P.map(k => k.slice(k.indexOf("|") + 1)))];
   return tk.length === 1 ? tk[0] : ""; };
-const inToko = x => { const P = pilihSet(); return !P.size || P.has(outletDari(x)); };
+/* ===== Kelompok usaha (CV/PT) =====
+   Beberapa toko digabung jadi satu kelompok = satu badan usaha. Memilih kelompok
+   menyaring semua laporan ke toko-toko di dalamnya. Pembelian milik kelompok, bukan
+   milik satu toko: barang yang dibeli CV A dipakai bersama oleh semua toko CV A. */
+const KELOMPOK_AWAL = () => [
+  { id: "k1", nama: "Kelompok 1 – Dunia Gelang & Sherozky",
+    outlets: ["shopee|Dunia Gelang", "shopee|Sherozky", "lazada|Dunia Gelang", "lazada|Sherozky", "tiktok|Dunia Gelang"] },
+  { id: "k2", nama: "Kelompok 2 – Stipa & Tanvery",
+    outlets: ["shopee|Stipa", "lazada|Stipa", "tiktok|Stipa", "shopee|Tanvery"] }];
+function daftarKelompok(){ if (!Array.isArray(S.setup.kelompok)) S.setup.kelompok = KELOMPOK_AWAL(); return S.setup.kelompok; }
+let KEL_CACHE = { src: null, byId: new Map(), byOutlet: new Map() };
+function petaKelompok(){
+  const L = daftarKelompok();
+  if (KEL_CACHE.src !== L){
+    const byId = new Map(), byOutlet = new Map();
+    for (const g of L){ byId.set(g.id, g); for (const o of g.outlets || []) if (!byOutlet.has(o)) byOutlet.set(o, g); }
+    KEL_CACHE = { src: L, byId, byOutlet };
+  }
+  return KEL_CACHE;
+}
+let BELI_SET = new WeakSet();
+const kelompokBaris = x => {
+  const K = petaKelompok();
+  if (x.kelompok) return K.byId.get(x.kelompok) || null;
+  if (BELI_SET.has(x)) return K.byOutlet.get(outletDari(x)) || null;
+  return null;
+};
+const kelompokOutlet = key => petaKelompok().byOutlet.get(key) || null;
+const inToko = x => {
+  const P = pilihSet(); if (!P.size) return true;
+  const g = kelompokBaris(x);
+  if (g) return g.outlets.some(o => P.has(o));
+  return P.has(outletDari(x));
+};
 /* Export "Semua Pesanan" memuat pesanan batal juga — barangnya tidak pernah keluar,
    jadi tidak boleh menimbulkan harga pokok. */
 const BATAL = /batal|cancel|dibatalkan|unpaid|belum bayar/;
@@ -2015,29 +2052,26 @@ const adaIsi = b => !!b && ["income","order","beli","ops","jurnal","produk","adj
    jadi pembatalan / perubahan di Invoice Manager ikut terbawa. */
 const DARI_INV = x => x && x.sumber === "invoice";
 let INV_TERAKHIR = null;
-function outletInvoice(){
-  const semua = daftarOutlet().filter(o => o.n > 0);
-  const pilih = S.setup.outletInvoice && semua.find(o => o.key === S.setup.outletInvoice);
-  if (pilih) return pilih;
-  const order = new Map();
-  for (const x of S.order) { const k = outletDari(x); order.set(k, (order.get(k) || 0) + 1); }
-  semua.sort((a, b) => (order.get(b.key) || 0) - (order.get(a.key) || 0));
-  return semua[0] || { key: "shopee|", plat: "shopee", toko: "" };
+function kelompokInvoice(){
+  const L = daftarKelompok();
+  return L.find(g => g.id === S.setup.kelompokInvoice) || L[0] || null;
 }
 function terapkanBeliInvoice(d){
   if (!d) return false;
-  const o = outletInvoice();
+  const g = kelompokInvoice();
+  const o0 = String((g && g.outlets[0]) || "shopee|").split("|");
+  const o = { plat: o0[0] || "shopee", toko: o0[1] || "" }, kel = g ? g.id : undefined;
   const lamaB = S.beli.filter(DARI_INV), lamaJ = S.jurnal.filter(DARI_INV);
   const beli = [], jurnal = [];
   for (const f of (d.beli || [])) for (const b of (f.baris || [])){
     const qty = Math.round(num(b.qty)), nilai = Math.round(num(b.nilai));
     const harga = qty > 0 ? Math.round(nilai / qty) : 0;
     beli.push({ tgl: f.tgl, faktur: f.faktur, supplier: f.supplier || "", sku: String(b.sku || ""), qty, harga,
-      biayaLain: nilai - qty * harga, bayar: "Utang", plat: o.plat, toko: o.toko, sumber: "invoice", invId: f.id });
+      biayaLain: nilai - qty * harga, bayar: "Utang", plat: o.plat, toko: o.toko, kelompok: kel, sumber: "invoice", invId: f.id });
   }
   for (const p of (d.bayar || [])){
     const akun = String(p.metode || "").toLowerCase() === "tunai" || String(p.metode || "").toLowerCase() === "cash" ? "1-100" : "1-110";
-    jurnal.push({ tgl: p.tgl, ket: "Pelunasan utang " + (p.supplier || "") + " · " + (p.faktur || ""), plat: o.plat, toko: o.toko,
+    jurnal.push({ tgl: p.tgl, ket: "Pelunasan utang " + (p.supplier || "") + " · " + (p.faktur || ""), plat: o.plat, toko: o.toko, kelompok: kel,
       sumber: "invoice", invId: p.id, baris: [{ kode: "2-100", d: Math.round(num(p.jumlah)), k: 0 }, { kode: akun, d: 0, k: Math.round(num(p.jumlah)) }] });
   }
   const sama = JSON.stringify(lamaB) === JSON.stringify(beli) && JSON.stringify(lamaJ) === JSON.stringify(jurnal);
@@ -2058,6 +2092,46 @@ async function muatBeliInvoice(){
     }
   } catch(e){}
 }
+/* ===== Pesanan harian dari Raksa =====
+   Pesanan yang ditarik robot Raksa masuk ke Pesanan Seller (1 baris per SKU, nomor pesanan,
+   status terbaru). Tidak disimpan ke buku — selalu diambil ulang saat Seller dibuka,
+   jadi status yang diperbarui robot ikut terbawa. Nomor pesanan yang sudah ada di data
+   Seller sendiri tidak diambil lagi (tidak dobel walau batch lama diunggah ulang ke Raksa). */
+const DARI_RAKSA = x => x && x.sumber === "raksa";
+const STATUS_RAKSA = { SELESAI: "Selesai", DIKIRIM: "Dikirim", BELUM_DIKIRIM: "Belum dikirim", DIBATALKAN: "Dibatalkan",
+  BELUM_DIBAYAR: "Belum bayar", PENGEMBALIAN: "Pengembalian" };
+let RAKSA_INFO = null;
+function tokoDariRaksa(nama){
+  const kepala = String(nama || "").split(" - ")[0].trim();
+  if (/^DG$/i.test(kepala)) return "Dunia Gelang";
+  return kepala.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
+}
+function terapkanPesananRaksa(rows){
+  const punya = new Set();
+  for (const x of S.order) if (!DARI_RAKSA(x)) { const k = normNo(x.no); if (k) punya.add(k); }
+  const baru = []; let lewat = 0;
+  for (const r of rows || []){
+    const [no, tglPesan, tgl, st, toko, mp, sku, qty, harga, variasi] = r;
+    if (punya.has(normNo(no))) { lewat++; continue; }
+    const q = num(qty);
+    baru.push({ tgl: tgl || tglPesan || "", tglPesan: tglPesan || "", no: no || "", sku: String(sku || ""), model: variasi || "",
+      status: STATUS_RAKSA[st] || st || "", qty: q, harga: num(harga), qtyRetur: st === "PENGEMBALIAN" ? q : 0,
+      plat: String(mp || "shopee").toLowerCase(), toko: tokoDariRaksa(toko), sumber: "raksa" });
+  }
+  S.order = S.order.filter(x => !DARI_RAKSA(x)).concat(baru);
+  RAKSA_INFO = { baris: baru.length, pesanan: new Set(baru.map(x => x.no)).size, lewat, waktu: new Date() };
+}
+async function muatPesananRaksa(){
+  if (!GABUNGAN || !SB || !AKUN || !AKUN.usahaId) return;
+  try {
+    const { data, error } = await SB.rpc("seller_pesanan_raksa", { p_company: AKUN.usahaId });
+    if (error || !Array.isArray(data)) return;
+    terapkanPesananRaksa(data);
+    segarkanPeta(); HASIL.clear(); REKAP.clear(); render();
+  } catch(e){}
+}
+/* Pesanan dari Raksa tidak ikut disimpan (diambil ulang tiap kali dibuka). */
+const untukSimpan = () => S.order.some(DARI_RAKSA) ? Object.assign({}, S, { order: S.order.filter(x => !DARI_RAKSA(x)) }) : S;
 async function muatBuku(usahaBaru){
   S = BLANK();
   const pakai = b => {
@@ -2088,6 +2162,7 @@ async function muatBuku(usahaBaru){
     note(!jauh && adaIsi(S) ? "Pembukuan perangkat ini diangkat ke server" : "Tersimpan di server");
   } else note("Tersinkron dengan server");
   muatBeliInvoice();
+  muatPesananRaksa();
 }
 /* Status langganan akun ini. Hanya dibaca kalau langganan sudah dinyalakan,
    jadi selama masih rancangan tidak ada permintaan tambahan ke server sama
@@ -2159,8 +2234,8 @@ async function simpanJauh(){
   try {
     if (GABUNGAN && !boleh("input") && !boleh("pengaturan")) return true;   // pelihat: tidak menulis
     const { error } = GABUNGAN
-      ? await SB.from("buku").upsert({ company_id: AKUN.usahaId, usaha: S.setup.nama || AKUN.usahaNama, data: S }, { onConflict: "company_id" })
-      : await SB.from("buku").upsert({ user_id: AKUN.induk || AKUN.id, usaha: S.setup.nama, data: S }, { onConflict: "user_id" });
+      ? await SB.from("buku").upsert({ company_id: AKUN.usahaId, usaha: S.setup.nama || AKUN.usahaNama, data: untukSimpan() }, { onConflict: "company_id" })
+      : await SB.from("buku").upsert({ user_id: AKUN.induk || AKUN.id, usaha: S.setup.nama, data: untukSimpan() }, { onConflict: "user_id" });
     return !error;
   } catch(e){ return false; }
 }
@@ -2224,7 +2299,7 @@ function save(){
   if (!AKUN) return;
   S.ts = Date.now();
   let lokalOK = true;
-  try { localStorage.setItem(cacheKunci(), JSON.stringify(S)); } catch(e){ lokalOK = false; }
+  try { localStorage.setItem(cacheKunci(), JSON.stringify(untukSimpan())); } catch(e){ lokalOK = false; }
   if (!lokalOK) note("Salinan lokal penuh — mengandalkan server");
   else note("Menyimpan…");
   clearTimeout(saveTimer);
@@ -3060,6 +3135,7 @@ function viewSku(){
     ${pandu(`Satu baris per SKU, dijumlahkan sepanjang rentang bulan yang dipilih. SKU yang sama dari dua toko
        otomatis menyatu — klik + untuk memecahnya kembali per toko dan per bulan.
        Isi Harga Modal langsung di tabel; nilainya dipakai untuk HPP di Laba Rugi.`)}</div>
+  ${RAKSA_INFO ? `<p class="status" style="margin:0 0 10px">🔒 Dari Raksa: <strong>${RE_ID.format(RAKSA_INFO.pesanan)}</strong> pesanan (${RE_ID.format(RAKSA_INFO.baris)} baris SKU), status terbaru per ${RAKSA_INFO.waktu.toLocaleString("id-ID", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", hourCycle:"h23", timeZone:"Asia/Jakarta" }).replace(",", "")} WIB${RAKSA_INFO.lewat ? ` · ${RE_ID.format(RAKSA_INFO.lewat)} baris dilewati karena nomor pesanannya sudah ada di Seller` : ""}. Diambil ulang setiap Seller dibuka; ubah lewat Raksa, bukan di sini.</p>` : ""}
   <div class="toolbar">
     <div class="field" style="max-width:200px"><label>Rentang</label>
       <select id="sku-mode">
@@ -4749,7 +4825,7 @@ function viewBeli(){
       <div class="toolbar" style="margin:10px 0 0">
         <button class="btn" data-badd="${gi}">+ Tambah baris</button>
         <span class="spacer"></span>
-        <span class="status">${esc(PLAT_NAMA(g.plat))}${g.toko ? " · " + esc(g.toko) : ""}</span>
+        <span class="status">${(() => { const k = kelompokBaris(g.baris[0].x); return k ? esc(k.nama) + " · stok bersama" : esc(PLAT_NAMA(g.plat)) + (g.toko ? " · " + esc(g.toko) : ""); })()}</span>
         <button class="btn danger" data-bdelinv="${gi}">Hapus faktur</button>
       </div>
     </div></div>`;
@@ -4760,9 +4836,10 @@ function viewBeli(){
     return html;
   }).join("");
   const nInv = new Set(S.beli.filter(DARI_INV).map(x => x.invId)).size;
-  const outs = daftarOutlet().filter(o => o.n > 0), oInv = outletInvoice();
+  const gInv = kelompokInvoice();
   const panelInv = GABUNGAN ? `<div class="status" style="margin:0 0 12px">Dari Invoice Manager: <strong>${nInv}</strong> invoice terposting
-      · masuk ke toko <select id="beli-outletinv" style="width:auto">${outs.map(o => `<option value="${esc(o.key)}"${o.key === oInv.key ? " selected" : ""}>${esc(labelOutlet(o))}</option>`).join("")}</select>
+      · milik <select id="beli-kelinv" style="width:auto">${daftarKelompok().map(g => `<option value="${esc(g.id)}"${gInv && g.id === gInv.id ? " selected" : ""}>${esc(g.nama)}</option>`).join("")}</select>
+      (dipakai bersama semua toko di kelompok ini)
       <button class="btn ghost" id="beli-seginv">Segarkan</button></div>` : "";
 
   return `
@@ -5202,6 +5279,56 @@ function terapkanUsulan(kodeList){
 
 
 /* ---------- pemilih toko (boleh lebih dari satu) ---------- */
+/* Editor kelompok: tiap toko dipilih masuk kelompok mana. Toko yang belum punya data
+   (mis. toko baru) bisa ditambahkan dengan nama dan platformnya. */
+function aturKelompok(semua, kembali){
+  let L = JSON.parse(JSON.stringify(daftarKelompok()));
+  const ekstra = new Set();
+  const gambarE = () => {
+    const keys = [...new Set([...semua.map(o => o.key), ...L.flatMap(g => g.outlets), ...ekstra])];
+    const milik = k => { const g = L.find(g => g.outlets.includes(k)); return g ? g.id : ""; };
+    dlgBody(`
+      <div class="hint">Satu kelompok = satu badan usaha (CV/PT). Pilih kelompok untuk tiap toko; nama kelompok bisa diganti.
+        Pembelian milik kelompok dipakai bersama semua tokonya.</div>
+      ${L.map((g, i) => `<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
+        <input type="text" data-knama="${i}" value="${esc(g.nama)}" style="flex:1">
+        <button type="button" class="btn ghost" data-khapus="${i}" title="Hapus kelompok">&times;</button></div>`).join("")}
+      <button type="button" class="btn" id="k-tambah" style="margin-bottom:14px">+ Kelompok baru</button>
+      <div class="tablewrap"><table><thead><tr><th>Platform</th><th>Toko</th><th>Kelompok</th></tr></thead><tbody>
+        ${keys.map(k => { const [pl, tk] = k.split("|"); return `<tr><td>${esc(PLAT_NAMA(pl))}</td><td>${esc(tk || "(tanpa nama toko)")}${semua.some(o => o.key === k) ? "" : ' <span class="status">belum ada data</span>'}</td>
+          <td><select data-kout="${esc(k)}"><option value="">— tanpa kelompok —</option>${L.map(g => `<option value="${esc(g.id)}"${milik(k) === g.id ? " selected" : ""}>${esc(g.nama)}</option>`).join("")}</select></td></tr>`; }).join("")}
+      </tbody></table></div>
+      <div class="toolbar" style="margin-top:10px">
+        <select id="k-plat" style="width:auto">${["shopee","tiktok","lazada"].map(p => `<option value="${p}">${esc(PLAT_NAMA(p))}</option>`).join("")}</select>
+        <input type="text" id="k-toko" placeholder="Nama toko baru" style="width:180px">
+        <button type="button" class="btn" id="k-tokobaru">+ Tambah toko</button>
+      </div>`,
+      `<button type="button" class="btn ghost" id="k-batal">Kembali</button>
+       <button type="button" class="btn primary" id="k-simpan">Simpan kelompok</button>`);
+    const b = document.getElementById("dlg-b");
+    b.querySelectorAll("[data-knama]").forEach(i => i.oninput = () => { L[+i.dataset.knama].nama = i.value; });
+    b.querySelectorAll("[data-khapus]").forEach(btn => btn.onclick = () => { L.splice(+btn.dataset.khapus, 1); gambarE(); });
+    b.querySelectorAll("[data-kout]").forEach(sel => sel.onchange = () => {
+      const k = sel.dataset.kout;
+      L.forEach(g => g.outlets = g.outlets.filter(o => o !== k));
+      const g = L.find(g => g.id === sel.value); if (g) g.outlets.push(k); else ekstra.add(k);
+    });
+    document.getElementById("k-tambah").onclick = () => { L.push({ id: "k" + Date.now().toString(36), nama: "Kelompok " + (L.length + 1), outlets: [] }); gambarE(); };
+    document.getElementById("k-tokobaru").onclick = () => {
+      const t = document.getElementById("k-toko").value.trim(); if (!t) return;
+      ekstra.add(document.getElementById("k-plat").value + "|" + t); gambarE();
+    };
+    document.getElementById("k-batal").onclick = () => kembali();
+    document.getElementById("k-simpan").onclick = () => {
+      S.setup.kelompok = L.map(g => ({ id: g.id, nama: String(g.nama || "").trim() || "Tanpa nama", outlets: [...new Set(g.outlets)] }));
+      if (!S.setup.kelompok.some(g => g.id === S.setup.kelompokInvoice)) delete S.setup.kelompokInvoice;
+      if (INV_TERAKHIR) terapkanBeliInvoice(INV_TERAKHIR);
+      save(); kembali();
+    };
+  };
+  document.getElementById("dlg-t").textContent = "Atur kelompok usaha (CV/PT)";
+  gambarE();
+}
 function bukaPilihToko(){
   const semua = daftarOutlet();
   let pilih = new Set(pilihList().length ? pilihList() : semua.map(o => o.key));
@@ -5223,7 +5350,17 @@ function bukaPilihToko(){
           <span class="status">${rp(o.n)} baris</span></label>`).join("")}
       </div>`;
     }).join("");
+    const kel = daftarKelompok().map((g, gi) => {
+      const ada = g.outlets.filter(o => semua.some(x => x.key === o));
+      const aktif = ada.length && ada.length === pilih.size && ada.every(o => pilih.has(o));
+      return `<button type="button" class="btn${aktif ? " primary" : ""}" data-kelpilih="${gi}" title="${esc(g.outlets.map(o => o.replace("|", " · ")).join(", "))}">${esc(g.nama)}</button>`;
+    }).join("");
     dlgBody(`
+      <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line2)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><strong style="font-size:13.5px">Kelompok usaha (CV/PT)</strong>
+          <span class="spacer" style="flex:1"></span><button type="button" class="btn ghost" id="kel-atur" style="padding:2px 8px;font-size:11.5px">Atur kelompok</button></div>
+        <div class="toolbar" style="margin:0;flex-wrap:wrap">${kel || '<span class="status">Belum ada kelompok.</span>'}</div>
+      </div>
       <div class="hint">Centang toko yang ingin ikut dihitung. Seluruh laporan, ringkasan, dan unduhan PDF
         mengikuti pilihan ini. Mencentang semuanya sama saja dengan tidak menyaring.</div>
       <div class="toolbar" style="margin-bottom:10px">
@@ -5246,6 +5383,11 @@ function bukaPilihToko(){
       list.forEach(o => semuaPl ? pilih.delete(o.key) : pilih.add(o.key));
       gambar();
     });
+    b.querySelectorAll("[data-kelpilih]").forEach(btn => btn.onclick = () => {
+      const g = daftarKelompok()[+btn.dataset.kelpilih];
+      pilih = new Set(g.outlets.filter(o => semua.some(x => x.key === o))); gambar();
+    });
+    document.getElementById("kel-atur").onclick = () => aturKelompok(semua, gambar);
     document.getElementById("po-semua").onclick = () => { pilih = new Set(semua.map(o => o.key)); gambar(); };
     document.getElementById("po-kosong").onclick = () => { pilih = new Set(); gambar(); };
     document.getElementById("dlg-close").onclick = () => dlg.close();
@@ -7937,7 +8079,7 @@ document.addEventListener("change", e => {
   if (t.id === "ak-metode"){ (S.ui ||= {}).akMetode = t.value; touch(); return; }
   if (t.id === "lr-banding"){ (S.ui ||= {}).banding = t.value === "0" ? false : t.value; touch(); return; }
   if (t.id === "lr-mode"){ lrState().mode = t.value; touch(); return; }
-  if (t.id === "beli-outletinv"){ S.setup.outletInvoice = t.value; if (INV_TERAKHIR) terapkanBeliInvoice(INV_TERAKHIR); touch(); return; }
+  if (t.id === "beli-kelinv"){ S.setup.kelompokInvoice = t.value; if (INV_TERAKHIR) terapkanBeliInvoice(INV_TERAKHIR); touch(); return; }
   if (t.id === "bb-akun"){ (S.ui ||= {}).bbAkun = t.value; touch(); return; }
   if (t.id === "bb-rinci"){ (S.ui ||= {}).bbRinci = t.value; touch(); return; }
   if (t.id === "lr-bulan"){ lrState().bulan = t.value; touch(); return; }
