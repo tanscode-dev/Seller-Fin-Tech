@@ -5384,8 +5384,8 @@ function bukaPilihToko(){
     }).join("");
     dlgBody(`
       <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line2)">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><strong style="font-size:13.5px">Kelompok usaha (CV/PT)</strong>
-          <span class="spacer" style="flex:1"></span><button type="button" class="btn ghost" id="kel-atur" style="padding:2px 8px;font-size:11.5px">Atur kelompok</button></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><strong style="font-size:13.5px">Badan usaha (CV/PT)</strong>
+          <span class="spacer" style="flex:1"></span><button type="button" class="btn ghost" id="kel-atur" style="padding:2px 8px;font-size:11.5px">${GABUNGAN ? "Atur di Business Manager ↗" : "Atur kelompok"}</button></div>
         <div class="toolbar" style="margin:0;flex-wrap:wrap">${kel || '<span class="status">Belum ada kelompok.</span>'}</div>
       </div>
       <div class="hint">Centang toko yang ingin ikut dihitung. Seluruh laporan, ringkasan, dan unduhan PDF
@@ -5414,7 +5414,11 @@ function bukaPilihToko(){
       const g = daftarKelompok()[+btn.dataset.kelpilih];
       pilih = new Set(g.outlets.filter(o => semua.some(x => x.key === o))); gambar();
     });
-    document.getElementById("kel-atur").onclick = () => aturKelompok(semua, gambar);
+    document.getElementById("kel-atur").onclick = () => {
+      // Badan usaha (CV/PT) diatur di Business Manager supaya sama untuk Seller, Invoice, PayrollKu & Raksa
+      if (GABUNGAN) { location.href = "/badan-usaha"; return; }
+      aturKelompok(semua, gambar);
+    };
     document.getElementById("po-semua").onclick = () => { pilih = new Set(semua.map(o => o.key)); gambar(); };
     document.getElementById("po-kosong").onclick = () => { pilih = new Set(); gambar(); };
     document.getElementById("dlg-close").onclick = () => dlg.close();
