@@ -566,6 +566,7 @@ const COA = [
  ["1-122","Piutang Marketplace — Lazada","Aset Lancar","D"],
  ["1-125","Piutang Pesanan Belum Dicairkan","Aset Lancar","D"],
  ["1-130","Piutang Lain-lain","Aset Lancar","D"],
+ ["1-135","Piutang Antar Badan Usaha","Aset Lancar","D"],
  ["1-140","Persediaan Barang Dagang","Aset Lancar","D"],
  ["1-150","PPN Masukan","Aset Lancar","D"],
  ["1-160","Biaya Dibayar di Muka","Aset Lancar","D"],
@@ -578,16 +579,19 @@ const COA = [
  ["1-212","Akumulasi Penyusutan Bangunan","Aset Tetap","K"],
  ["2-100","Utang Usaha (Supplier)","Kewajiban","K"],
  ["2-110","Utang Lain-lain / Pinjaman","Kewajiban","K"],
+ ["2-115","Utang Antar Badan Usaha","Kewajiban","K"],
  ["2-120","PPN Keluaran","Kewajiban","K"],
  ["2-130","Utang PPh Final UMKM","Kewajiban","K"],
  ["2-140","Utang Gaji","Kewajiban","K"],
  ["3-100","Modal Pemilik","Ekuitas","K"],
  ["3-110","Prive (Pengambilan Pemilik)","Ekuitas","D"],
  ["4-100","Penjualan Bruto","Pendapatan","K"],
+ ["4-150","Penjualan Antar Badan Usaha","Pendapatan","K"],
  ["4-200","Diskon & Voucher Ditanggung Penjual","Pendapatan","D"],
  ["4-300","Retur & Potongan Penjualan","Pendapatan","D"],
  ["5-100","Harga Pokok Penjualan (HPP)","HPP","D"],
  ["5-110","Selisih Harga Perolehan & Ongkos Masuk","HPP","D"],
+ ["5-120","Selisih Harga Beli Antar Badan Usaha","HPP","D"],
  ["6-100","Beban Komisi / Biaya Administrasi MP","Beban Marketplace","D"],
  ["6-110","Beban Biaya Layanan Marketplace","Beban Marketplace","D"],
  ["6-120","Beban Program Marketplace (GO/Promo Xtra)","Beban Marketplace","D"],
@@ -1524,6 +1528,22 @@ function hitungBuku(m, a){
     bbSet(x.tgl, bbKet("Jurnal manual", x));
     for (const l of jurnalBaris(x)) add(l.kode, num(l.d), num(l.k));
   }
+  /* Jual-beli antar badan usaha (barang milik CV A terjual di toko CV B).
+     Penjual: piutang antar BU / penjualan antar BU, HPP / persediaan (modal).
+     Pembeli: persediaan (modal) + selisih harga beli (markup) / utang antar BU.
+     Digabung semua badan usaha, labanya saling hapus menjadi nol. */
+  for (const x of (S.antar || [])){
+    if (!inPeriod(x.tgl)) continue;
+    const mv = num(x.qty) * num(x.modal), jv = num(x.qty) * num(x.harga);
+    if (inToko({ kelompok: x.dari })){
+      bbSet(x.tgl, "Jual antar badan usaha · " + x.kode);
+      add("1-135", jv, 0); add("4-150", 0, jv); add("5-100", mv, 0); add("1-140", 0, mv);
+    }
+    if (inToko({ kelompok: x.ke })){
+      bbSet(x.tgl, "Beli antar badan usaha · " + x.kode);
+      add("1-140", mv, 0); if (jv - mv) add("5-120", jv - mv, 0); add("2-115", 0, jv);
+    }
+  }
 
   const net = k => (A[k] ? A[k].d - A[k].c : 0);
   const mut = k => { const a = A[k] || { d:0,c:0 }, w = AWAL[k] || { d:0,c:0 };
@@ -1532,10 +1552,10 @@ function hitungBuku(m, a){
   const totD = Object.values(A).reduce((s,a) => s + Math.max(a.d - a.c, 0), 0);
   const totK = Object.values(A).reduce((s,a) => s + Math.max(a.c - a.d, 0), 0);
 
-  const penjualanBruto = -net("4-100");
+  const penjualanBruto = -net("4-100") - net("4-150");
   const potongan = net("4-200") + net("4-300");
   const penjualanNeto = penjualanBruto - potongan;
-  const hpp = net("5-100") + net("5-110");
+  const hpp = net("5-100") + net("5-110") + net("5-120");
   const labaKotor = penjualanNeto - hpp;
   const MP = ["6-100","6-110","6-120","6-130","6-140","6-145","6-150","6-160","6-170"];
   const OPX = ["7-100","7-110","7-120","7-130","7-140","7-150","7-160","7-170","7-180","7-190"];
@@ -1546,9 +1566,9 @@ function hitungBuku(m, a){
   const pajak = net("9-100");
   const labaBersih = ebt - pajak;
 
-  const ASET_L = ["1-100","1-110","1-120","1-121","1-122","1-125","1-130","1-140","1-150","1-160","1-170"];
+  const ASET_L = ["1-100","1-110","1-120","1-121","1-122","1-125","1-130","1-135","1-140","1-150","1-160","1-170"];
   const ASET_T = ["1-200","1-201","1-202","1-210","1-211","1-212"];
-  const KWJ = ["2-100","2-110","2-120","2-130","2-140"];
+  const KWJ = ["2-100","2-110","2-115","2-120","2-130","2-140"];
   const totAset = sum(ASET_L) + sum(ASET_T);
   const totKwj = -sum(KWJ);
   const totEkuitas = -net("3-100") - net("3-110") + labaBersih;
@@ -2087,10 +2107,10 @@ function terapkanBeliInvoice(d){
 }
 async function muatKelompokDb(){
   try {
-    const { data, error } = await SB.from("kelompok_usaha").select("id,nama,outlets,urut").eq("company_id", AKUN.usahaId).eq("aktif", true).order("urut");
+    const { data, error } = await SB.from("kelompok_usaha").select("id,nama,outlets,urut,markup_antar").eq("company_id", AKUN.usahaId).eq("aktif", true).order("urut");
     if (error) return;
     if (data && data.length){
-      const L = data.map(g => ({ id: g.id, nama: g.nama, outlets: Array.isArray(g.outlets) ? g.outlets : [] }));
+      const L = data.map(g => ({ id: g.id, nama: g.nama, outlets: Array.isArray(g.outlets) ? g.outlets : [], markup: num(g.markup_antar) }));
       if (JSON.stringify(L) !== JSON.stringify(S.setup.kelompok || null)) S.setup.kelompok = L;
     } else if (boleh("pengaturan")) {
       await SB.rpc("simpan_kelompok_usaha", { p_company: AKUN.usahaId, p_list: daftarKelompok() });
@@ -2611,6 +2631,7 @@ const NAV = [
   ["b","iklan","Iklan"],
   ["b","saldo","Penarikan Dana"],
   ["b","beli","Pembelian"],
+  ["b","antar","Jual-Beli Antar CV/PT"],
   ["b","ops","Biaya Operasional"],
   ["b","aset","Aset Tetap"],
   ["b","pajak","Setoran Pajak"],
@@ -2640,7 +2661,7 @@ const NAV_HAK = {
   rekon:"laporan", cutoff:"laporan", fiskal:"laporan", neracasaldo:"laporan", bukubesar:"laporan",
   akun:"pengaturan", setup:"pengaturan", pengguna:"pengguna", paket:"pengguna",
   income:"input", order:"input", adjust:"input", mutasi:"input", iklan:"input", manual:"input",
-  saldo:"input", beli:"input", ops:"input", aset:"input", pajak:"input", jurnal:"input",
+  saldo:"input", beli:"input", antar:"input", ops:"input", aset:"input", pajak:"input", jurnal:"input",
   produk:"input", resep:"input", varian:"input", katalog:"input", katalogSet:"input",
 };
 const bolehHalaman = id => !NAV_HAK[id] || boleh(NAV_HAK[id]);
@@ -2691,7 +2712,7 @@ function render(){
     : TABLES[page] ? viewTable(page) : ({
     ringkasan: () => viewRingkasan(R), labarugi: () => viewLabaRugi(),
     neraca: () => viewNeraca(), aruskas: () => viewArusKas(),
-    neracasaldo: () => viewNeracaSaldo(R), bukubesar: () => viewBukuBesar(), rekon: () => viewRekon(R), cutoff: () => viewCutoff(R),
+    neracasaldo: () => viewNeracaSaldo(R), bukubesar: () => viewBukuBesar(), antar: () => viewAntar(), rekon: () => viewRekon(R), cutoff: () => viewCutoff(R),
     fiskal: () => viewFiskal(),
     akun: () => viewAkun(R), setup: () => viewSetup(), paket: () => viewPaket(), pengguna: () => viewPengguna(),
   }[page])();
@@ -6337,6 +6358,87 @@ function bukuBesarData(kode, dari, sampai){
   baris.sort((a,b) => a.t < b.t ? -1 : a.t > b.t ? 1 : 0);
   return { awal, baris };
 }
+/* ===== Jual-beli antar badan usaha (CV/PT) =====
+   Pemilik barang = badan usaha yang membelinya (Pembelian). SKU yang belum pernah dibeli
+   dianggap milik badan usaha pertama. Bila barang milik A terjual di toko milik B,
+   halaman ini mengusulkan jual-beli A → B seharga modal × (1 + markup A). Setelah
+   disetujui, dicatat di kedua buku (lihat mesin akuntansi). */
+function usulanAntar(bulan){
+  segarkanPeta();
+  const L = daftarKelompok(); if (L.length < 2) return [];
+  const def = L[0].id, K = petaKelompok();
+  const beliOleh = new Map();
+  for (const x of S.beli){
+    const g = kelompokBaris(x); if (!g) continue;
+    const k = normKode(x.sku); if (!k) continue;
+    const m = beliOleh.get(k) || new Map(); m.set(g.id, (m.get(g.id) || 0) + num(x.qty)); beliOleh.set(k, m);
+  }
+  const VAR = petaVarian(), RES = petaResep(), MK = RES.__mk || petaModalKode();
+  const acc = new Map();
+  for (const x of S.order){
+    if (pesananBatal(x) || String(x.tgl || "").slice(0,7) !== bulan) continue;
+    const gj = kelompokOutlet(outletDari(x)); if (!gj) continue;
+    const q = num(x.qty) - num(x.qtyRetur); if (q <= 0) continue;
+    for (const u of uraiUnit(x, VAR, RES, q)){
+      const kode = normKode(u.kode); if (!kode) continue;
+      const pembeli = beliOleh.get(kode);
+      if (pembeli && pembeli.has(gj.id)) continue;
+      let pemilik = def;
+      if (pembeli) { let best = -1; for (const [id, n] of pembeli) if (n > best && K.byId.has(id)) { best = n; pemilik = id; } }
+      if (pemilik === gj.id) continue;
+      const key = pemilik + "|" + gj.id + "|" + kode;
+      acc.set(key, (acc.get(key) || 0) + u.qty);
+    }
+  }
+  const sudah = new Map();
+  for (const a of (S.antar || [])) if (a.bulan === bulan) { const key = a.dari + "|" + a.ke + "|" + a.kode; sudah.set(key, (sudah.get(key) || 0) + num(a.qty)); }
+  const out = [];
+  for (const [key, qty] of acc){
+    const sisa = qty - (sudah.get(key) || 0); if (sisa <= 0) continue;
+    const [dari, ke, kode] = key.split("|");
+    const modal = num(MK.get(kode) || 0), mk = num((K.byId.get(dari) || {}).markup);
+    out.push({ dari, ke, kode, qty: sisa, modal, harga: Math.round(modal * (1 + mk / 100)) });
+  }
+  return out.sort((a, b) => (a.dari + a.ke).localeCompare(b.dari + b.ke) || b.qty * b.modal - a.qty * a.modal);
+}
+const fmtBulanAntar = b => { const [y, m] = b.split("-").map(Number); return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("id-ID", { month: "long", year: "numeric", timeZone: "UTC" }); };
+function viewAntar(){
+  const L = daftarKelompok(), K = petaKelompok(), nama = id => (K.byId.get(id) || { nama: id }).nama;
+  S.ui = S.ui || {};
+  const now = new Date(Date.now() + 7 * 3600e3);
+  const bulanDef = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+  const bulan = S.ui.antarBulan || bulanDef;
+  if (L.length < 2) return `<div class="pagehead"><h1>Jual-Beli Antar CV/PT</h1></div><div class="card"><div class="bd">Baru ada satu badan usaha. Tambahkan badan usaha di Business Manager → Badan Usaha.</div></div>`;
+  const U = usulanAntar(bulan);
+  const tot = U.reduce((a, r) => (a.m += r.qty * r.modal, a.j += r.qty * r.harga, a), { m: 0, j: 0 });
+  const nolModal = U.filter(r => !r.modal).length;
+  const disetujui = (S.antar || []).filter(a => a.bulan === bulan);
+  const ringkas = new Map();
+  for (const a of (S.antar || [])){ const k = a.dari + "|" + a.ke; const v = ringkas.get(k) || { j: 0 }; v.j += num(a.qty) * num(a.harga); ringkas.set(k, v); }
+  return `<div class="pagehead"><h1>Jual-Beli Antar CV/PT</h1>
+    <p>Barang milik satu badan usaha yang terjual di toko badan usaha lain dicatat sebagai jual-beli: harga = modal × (1 + markup penjual). Pemilik barang = badan usaha yang membelinya di Pembelian (SKU yang belum pernah dibeli dianggap milik ${esc(L[0].nama)}).</p></div>
+  <div class="card" style="margin-bottom:14px"><div class="bd">
+    <strong>Markup jual ke badan usaha lain</strong>
+    <div class="grid2" style="margin-top:8px">${L.map(g => `<div class="field"><label>${esc(g.nama)} menjual ke badan usaha lain</label>
+      <div style="display:flex;align-items:center;gap:6px"><input type="number" min="0" max="500" step="0.5" data-markup="${esc(g.id)}" value="${num(g.markup)}" style="max-width:110px"> <span>% di atas modal</span></div></div>`).join("")}</div>
+    <p class="status" style="margin-top:6px">Contoh: modal Rp10.000, markup 10% → dijual ke badan usaha lain Rp11.000. Pilih persentase yang wajar (mendekati harga ke pihak luar/reseller) karena badan usaha dengan pemilik sama termasuk hubungan istimewa.</p>
+  </div></div>
+  <div class="toolbar"><div class="field" style="max-width:200px"><label>Bulan</label><input type="month" id="antar-bulan" value="${esc(bulan)}"></div></div>
+  <div class="card" style="margin-bottom:14px"><div class="bd">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><strong>Usulan ${esc(fmtBulanAntar(bulan))}</strong>
+      <span class="status">${RE_ID.format(U.length)} baris · modal ${rp(tot.m)} · harga antar ${rp(tot.j)}</span>
+      <span style="flex:1"></span>${U.length && boleh("input") ? `<button class="btn primary" id="antar-setuju">Setujui & catat semua</button>` : ""}</div>
+    ${nolModal ? `<p class="status" style="color:var(--warn)">${nolModal} SKU belum punya Harga Modal — isi di Master Produk dulu supaya nilainya benar.</p>` : ""}
+    ${U.length ? `<div class="tablewrap" style="margin-top:8px;max-height:420px;overflow:auto"><table><thead><tr><th>Dari</th><th>Ke</th><th>SKU</th><th class="num">Qty</th><th class="num">Modal</th><th class="num">Harga antar</th><th class="num">Total</th></tr></thead><tbody>
+      ${U.slice(0, 1500).map(r => `<tr><td>${esc(nama(r.dari))}</td><td>${esc(nama(r.ke))}</td><td>${esc(r.kode)}</td><td class="num">${RE_ID.format(r.qty)}</td><td class="num">${rp(r.modal)}</td><td class="num">${rp(r.harga)}</td><td class="num">${rp(r.qty * r.harga)}</td></tr>`).join("")}
+    </tbody></table></div>` : `<p class="status" style="margin-top:8px">Tidak ada barang lintas badan usaha yang belum dicatat pada bulan ini.</p>`}
+  </div></div>
+  <div class="card"><div class="bd">
+    <div style="display:flex;align-items:center;gap:10px"><strong>Sudah dicatat ${esc(fmtBulanAntar(bulan))}</strong><span class="status">${RE_ID.format(disetujui.length)} baris · ${rp(disetujui.reduce((a, x) => a + num(x.qty) * num(x.harga), 0))}</span>
+      <span style="flex:1"></span>${disetujui.length && boleh("input") ? `<button class="btn danger" id="antar-batal">Batalkan catatan bulan ini</button>` : ""}</div>
+    <p class="status" style="margin-top:6px">Saldo antar badan usaha (semua bulan): ${[...ringkas].map(([k, v]) => { const [d, ke] = k.split("|"); return `${esc(nama(ke))} berutang ke ${esc(nama(d))} ${rp(v.j)}`; }).join(" · ") || "—"}. Pelunasan dicatat lewat Jurnal Manual (Utang/Piutang Antar Badan Usaha ↔ Bank).</p>
+  </div></div>`;
+}
 function viewBukuBesar(){
   const [dari, sampai] = rentangLaporan();
   const ui = S.ui || {};
@@ -7747,6 +7849,17 @@ document.addEventListener("click", async e => {
   if (t.id === "tb-outlet" || t.id === "sku-outlet"){ bukaPilihToko(); return; }
   if (t.id === "sku-mentah"){ mentah = !mentah; render(); return; }
   if (t.id === "beli-mentah"){ mentahBeli = !mentahBeli; render(); return; }
+  if (t.id === "antar-setuju"){
+    const b = S.ui.antarBulan || document.getElementById("antar-bulan").value, U = usulanAntar(b), tgl = akhirBulan(b);
+    S.antar = (S.antar || []).concat(U.map(r => ({ id: "an" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7), bulan: b, tgl, kode: r.kode, qty: r.qty, dari: r.dari, ke: r.ke, modal: r.modal, harga: r.harga })));
+    touch(); note(`${U.length} baris jual-beli antar badan usaha dicatat per ${fmtD(tgl)}`); return;
+  }
+  if (t.id === "antar-batal"){
+    const b = S.ui.antarBulan || document.getElementById("antar-bulan").value;
+    kotak("Batalkan catatan?", "Semua jual-beli antar badan usaha bulan " + fmtBulanAntar(b) + " dihapus dari buku. Usulannya akan muncul lagi.", [{ label: "Tidak", nilai: false, gaya: "ghost" }, { label: "Ya, batalkan", nilai: true, gaya: "danger" }])
+      .then(ok => { if (ok){ S.antar = (S.antar || []).filter(a => a.bulan !== b); touch(); } });
+    return;
+  }
   if (t.id === "beli-seginv"){ muatBeliInvoice().then(() => note("Pembelian dari Invoice Manager disegarkan")); return; }
   if (t.id === "resep-mentah"){ mentahResep = !mentahResep; render(); return; }
   if (t.id === "resep-tpl"){ await unduhTemplateResep(); return; }
@@ -8110,6 +8223,16 @@ document.addEventListener("change", e => {
   if (t.id === "ak-metode"){ (S.ui ||= {}).akMetode = t.value; touch(); return; }
   if (t.id === "lr-banding"){ (S.ui ||= {}).banding = t.value === "0" ? false : t.value; touch(); return; }
   if (t.id === "lr-mode"){ lrState().mode = t.value; touch(); return; }
+  if (t.id === "antar-bulan"){ S.ui.antarBulan = t.value; render(); return; }
+  if (t.dataset && t.dataset.markup !== undefined){
+    const id = t.dataset.markup, v = Math.max(0, Math.min(500, num(t.value)));
+    const g = daftarKelompok().find(x => x.id === id); if (g) g.markup = v;
+    const selesai = () => { HASIL.clear(); render(); };
+    if (GABUNGAN && SB && AKUN && AKUN.usahaId){
+      SB.rpc("atur_markup_antar", { p_company: AKUN.usahaId, p_id: id, p_persen: v }).then(({ error }) => { note(error ? "Markup belum tersimpan: " + error.message : "Markup " + (g ? g.nama : id) + " " + v + "% disimpan"); save(); selesai(); });
+    } else { save(); selesai(); }
+    return;
+  }
   if (t.id === "bb-akun"){ (S.ui ||= {}).bbAkun = t.value; touch(); return; }
   if (t.id === "bb-rinci"){ (S.ui ||= {}).bbRinci = t.value; touch(); return; }
   if (t.id === "lr-bulan"){ lrState().bulan = t.value; touch(); return; }
