@@ -893,6 +893,23 @@ const kelompokBaris = x => {
   return null;
 };
 const kelompokOutlet = key => petaKelompok().byOutlet.get(key) || null;
+/* Pajak per badan usaha (wajib pajak) — diatur di Business Manager → Badan Usaha.
+   Tanpa data dari server (mode mandiri) dipakai Pengaturan Seller seperti dulu. */
+function pajakKel(g){
+  const s = S.setup, p = g && g.pajak;
+  if (p) return { ...p, ambang: p.bentuk === "badan" ? 0 : num(p.ambang), nama: g.namaResmi || g.nama };
+  return { bentuk: s.bentuk === "badan" ? "badan" : "pribadi", pkp: !!s.pkp, tarifPpn: num(s.tarifPpn), pphAktif: !!s.pphAktif,
+    tarifPph: num(s.tarifPph), ambang: s.bentuk !== "badan" ? num(s.ambang) : 0, kawin: !!s.kawin, tanggungan: num(s.tanggungan),
+    nama: g ? (g.namaResmi || g.nama) : s.nama };
+}
+/* badan usaha pemilik sebuah baris; baris tanpa toko dikenal ikut badan usaha pertama */
+const kelompokDari = x => kelompokBaris(x) || kelompokOutlet(outletDari(x)) || daftarKelompok()[0] || null;
+const ppnBaris = x => { const p = pajakKel(kelompokDari(x)); return p.pkp ? num(p.tarifPpn) : 0; };
+/* badan usaha yang tercakup saringan toko saat ini */
+function kelompokTampil(){
+  const L = daftarKelompok(), P = pilihSet();
+  return P.size ? L.filter(g => g.outlets.some(o => P.has(o))) : L.slice();
+}
 const inToko = x => {
   const P = pilihSet(); if (!P.size) return true;
   const g = kelompokBaris(x);
@@ -1017,8 +1034,7 @@ const jurnalNilai = j => totalJurnal(j).d;
 function biayaRataRata(){
   /* Semuanya dikunci memakai Kode Barang — sama seperti kartu stok — supaya pembelian,
      penjualan, dan komponen hasil urai resep bertemu di satu SKU yang sama. */
-  const r = S.setup.pkp ? num(S.setup.tarifPpn) : 0;
-  const tanpaPpn = v => r ? v - (v * r / (1 + r)) : v;
+  const tanpaPpn = (v, x) => { const r = ppnBaris(x); return r ? v - (v * r / (1 + r)) : v; };
   const AK = petaAkui(), VAR = petaVarian(), RES = petaResep();
   const AWAL = {};
   for (const p of S.produk){
@@ -1035,7 +1051,7 @@ function biayaRataRata(){
     bulanSet.add(b);
     (beli[k] ||= {})[b] ||= { qty:0, nilai:0 };
     beli[k][b].qty += num(x.qty);
-    beli[k][b].nilai += tanpaPpn(num(x.qty) * num(x.harga)) + num(x.biayaLain);
+    beli[k][b].nilai += tanpaPpn(num(x.qty) * num(x.harga), x) + num(x.biayaLain);
   }
   for (const x of S.order){
     const b = String(tglAkuiPesanan(x, AK) || "").slice(0,7); if (!b) continue;
@@ -1295,8 +1311,7 @@ function hitungBuku(m, a){
   const kasAkun = t => t === "Kas" ? "1-100" : t === "Bank" ? "1-110" : t === "Utang" ? "2-100" : null;
   const piutang = x => PIUTANG_AKUN[x && x.plat] || "1-120";
   const modal = petaModal();
-  const r = S.setup.pkp ? num(S.setup.tarifPpn) : 0;
-  const ppnPart = x => r ? x * r / (1 + r) : 0;
+  const ppnPart = (v, x) => { const r = ppnBaris(x); return r ? v * r / (1 + r) : 0; };
 
   for (const [k] of COA) add(k, 0, 0);
   bbSet(batasMulai, "Saldo awal");
@@ -1317,7 +1332,7 @@ function hitungBuku(m, a){
             + num(x.komisi)+num(x.iklanAuto)+num(x.lainnya);
     pph22Total += num(x.pph22);
     const P = selisihIncome(x);
-    const ppnK = ppnPart(num(x.bruto));
+    const ppnK = ppnPart(num(x.bruto), x);
     add(piutang(x), num(x.total), 0);
     add("4-200", disc, 0);
     add("4-300", num(x.retur), 0); returPesanan += num(x.retur);
@@ -1341,39 +1356,53 @@ function hitungBuku(m, a){
      satu tahun pajak tidak dikenai PPh Final — hanya untuk Wajib Pajak orang pribadi.
      Ambangnya kumulatif, jadi dihitung urut tanggal sejak awal tahun pajak, termasuk
      bulan-bulan di luar rentang laporan yang sedang dilihat. */
-  const ambang = (S.setup.bentuk !== "badan") ? num(S.setup.ambang) : 0;
+  /* PPh Final dihitung PER BADAN USAHA (wajib pajak) — tarif, aktif/tidak, dan ambang
+     Rp 500 juta (khusus orang pribadi) diatur di Business Manager → Badan Usaha.
+     Ambangnya kumulatif sejak awal tahun pajak atas SEMUA toko milik wajib pajak itu
+     (penjualan marketplace + penjualan manual); saringan toko hanya memilih baris yang
+     dilaporkan, tidak memperkecil peredaran brutonya. */
   const dasarBaris = x => num(x.bruto) - num(x.diskon) - num(x.voucher) - num(x.koin) - num(x.retur);
   const incomeToko = S.income.filter(inToko);
-  const pajakMasa = {}, brutoTahun = {};
-  let dasarKena = 0;
+  const pajakMasa = {}, brutoTahun = {}, pajakPer = {};
+  let dasarKena = 0, pphTerutang = 0;
   {
-    /* Peredaran bruto = penjualan marketplace DAN penjualan manual. Keduanya
-       peredaran usaha yang sama di mata PPh Final, jadi ambang Rp 500 juta
-       dihitung dari gabungannya, bukan dari marketplace saja. */
-    const urut = incomeToko.filter(x => x.tgl).map(x => ({ tgl:x.tgl, d: dasarBaris(x) }))
-      .concat((S.manual || []).filter(x => x.tgl && inToko(x))
-        .map(x => ({ tgl:x.tgl, d: num(x.qty) * num(x.harga) - num(x.diskon) })))
+    const urut = S.income.filter(x => x.tgl).map(x => ({ tgl:x.tgl, d: dasarBaris(x), g: kelompokDari(x), ikut: inToko(x) }))
+      .concat((S.manual || []).filter(x => x.tgl)
+        .map(x => ({ tgl:x.tgl, d: num(x.qty) * num(x.harga) - num(x.diskon), g: kelompokDari(x), ikut: inToko(x) })))
       .sort((a,b) => a.tgl < b.tgl ? -1 : a.tgl > b.tgl ? 1 : 0);
     const kum = {};
     for (const x of urut){
-      const y = yearOf(x.tgl), d = x.d;
-      const sebelum = kum[y] || 0, sesudah = sebelum + d;
-      kum[y] = sesudah;
-      if (x.tgl <= batasAkhir) brutoTahun[y] = sesudah;
-      const kena = Math.max(0, sesudah - Math.max(ambang, sebelum));
+      /* tanpa pajak dari Business Manager (mode mandiri) seluruh buku = satu wajib pajak, seperti dulu */
+      const gB = x.g && x.g.pajak ? x.g : null, gid = gB ? gB.id : "_", P = pajakKel(gB);
+      const y = yearOf(x.tgl), d = x.d, kk = gid + "|" + y;
+      const sebelum = kum[kk] || 0, sesudah = sebelum + d;
+      kum[kk] = sesudah;
+      if (!x.ikut) continue;
+      const per = (pajakPer[gid] ||= { id: gid, nama: P.nama, bentuk: P.bentuk, ambang: num(P.ambang), tarif: num(P.tarifPph),
+        aktif: !!P.pphAktif, dasar:0, kena:0, pph:0, brutoTahun:{} });
+      if (x.tgl <= batasAkhir) per.brutoTahun[y] = sesudah;
+      const kena = Math.max(0, sesudah - Math.max(num(P.ambang), sebelum));
       if (!inPeriod(x.tgl)) continue;
-      dasarKena += kena;
+      const pph = P.pphAktif ? kena * num(P.tarifPph) : 0;
+      dasarKena += kena; pphTerutang += pph;
+      per.dasar += d; per.kena += kena; per.pph += pph;
       const b = String(x.tgl).slice(0,7);
-      (pajakMasa[b] ||= { dasar:0, kena:0 });
-      pajakMasa[b].dasar += d; pajakMasa[b].kena += kena;
+      (pajakMasa[b] ||= { dasar:0, kena:0, pph:0 });
+      pajakMasa[b].dasar += d; pajakMasa[b].kena += kena; pajakMasa[b].pph += pph;
     }
+    for (const per of Object.values(pajakPer))
+      for (const [y, v] of Object.entries(per.brutoTahun)) brutoTahun[y] = (brutoTahun[y] || 0) + v;
   }
+  const grupPajak = Object.values(pajakPer);
+  const ambang = grupPajak.reduce((a, g) => a + num(g.ambang), 0);
+  const pphAktif = grupPajak.length ? grupPajak.some(g => g.aktif) : !!pajakKel(kelompokTampil()[0] || null).pphAktif;
+  const tarifSet = [...new Set(grupPajak.filter(g => g.aktif).map(g => g.tarif))];
+  const tarifTeks = tarifSet.length === 1 ? (tarifSet[0] * 100).toFixed(2) + "%" : tarifSet.length ? "tarif per badan usaha" : "";
   for (const x of (S.manual || [])) if (pakai(x))
     omzetBasis += num(x.qty) * num(x.harga) - num(x.diskon);
-  let pphTerutang = 0, pphDikredit = 0;
+  let pphDikredit = 0;
   bbSet(batasAkhir, "PPh Final periode " + fmtD(batasMulai) + "–" + fmtD(batasAkhir));
-  if (S.setup.pphAktif){
-    pphTerutang = dasarKena * num(S.setup.tarifPph);
+  if (pphAktif){
     add("9-100", pphTerutang, 0); add("2-130", 0, pphTerutang);
   }
   /* PPh 22 yang dipungut marketplace adalah pembayaran di muka atas PPh yang sama,
@@ -1411,7 +1440,7 @@ function hitungBuku(m, a){
     if (!pakai(x)) continue;
     const bruto = num(x.qty) * num(x.harga), disk = num(x.diskon);
     if (!bruto && !disk) continue;
-    const ppnK = ppnPart(bruto);
+    const ppnK = ppnPart(bruto, x);
     bbSet(x.tgl, bbKet("Penjualan manual", x));
     add(x.bayar === "Piutang" ? "1-130" : x.bayar === "Bank" ? "1-110" : "1-100", bruto - disk, 0);
     if (disk) add("4-200", disk, 0);
@@ -1476,7 +1505,7 @@ function hitungBuku(m, a){
   }
   for (const x of S.beli){
     if (!pakai(x)) continue;
-    const barang = num(x.qty) * num(x.harga), tot = barang + num(x.biayaLain), pm = ppnPart(barang);
+    const barang = num(x.qty) * num(x.harga), tot = barang + num(x.biayaLain), pm = ppnPart(barang, x);
     bbSet(x.tgl, bbKet("Pembelian", x));
     add("1-150", pm, 0);
     add(kasAkun(x.bayar) || "1-110", 0, tot);
@@ -1577,7 +1606,7 @@ function hitungBuku(m, a){
     penjualanBruto, potongan, penjualanNeto, hpp, labaKotor, bebanMp, bebanOps, hppRetur, retur,
     labaUsaha, lain, ebt, pajak, labaBersih,
     MP, OPX, ASET_L, ASET_T, KWJ, totAset, totKwj, totEkuitas, bulanan, omzetBasis,
-    pph22Total, pphTerutang, pphDikredit, ambang, dasarKena, pajakMasa, brutoTahun,
+    pph22Total, pphTerutang, pphDikredit, ambang, dasarKena, pajakMasa, brutoTahun, pajakPer: grupPajak, pphAktif, tarifTeks,
     returPesanan, returPenyesuaian, lainPenyesuaian,
     pphDisetor: S.pajak.filter(x => pakai(x) && (x.jenis || "2-130") === "2-130")
                        .reduce((a,x) => a + num(x.jumlah), 0) };
@@ -2107,10 +2136,14 @@ function terapkanBeliInvoice(d){
 }
 async function muatKelompokDb(){
   try {
-    const { data, error } = await SB.from("kelompok_usaha").select("id,nama,outlets,urut,markup_antar").eq("company_id", AKUN.usahaId).eq("aktif", true).order("urut");
+    const { data, error } = await SB.from("kelompok_usaha").select("id,nama,outlets,urut,markup_antar,nama_resmi,jenis_wp,pkp,tarif_ppn,pph_final,tarif_pph_final,ambang_pph,ptkp_kawin,ptkp_tanggungan").eq("company_id", AKUN.usahaId).eq("aktif", true).order("urut");
     if (error) return;
     if (data && data.length){
-      const L = data.map(g => ({ id: g.id, nama: g.nama, outlets: Array.isArray(g.outlets) ? g.outlets : [], markup: num(g.markup_antar) }));
+      const L = data.map(g => ({ id: g.id, nama: g.nama, outlets: Array.isArray(g.outlets) ? g.outlets : [], markup: num(g.markup_antar),
+        namaResmi: g.nama_resmi || "",
+        pajak: { bentuk: g.jenis_wp === "badan" ? "badan" : "pribadi", pkp: !!g.pkp, tarifPpn: num(g.tarif_ppn), pphAktif: g.pph_final !== false,
+          tarifPph: num(g.tarif_pph_final), ambang: num(g.ambang_pph), kawin: !!g.ptkp_kawin, tanggungan: num(g.ptkp_tanggungan) } }));
+      if (AKUN && AKUN.usahaNama && S.setup.nama !== AKUN.usahaNama) S.setup.nama = AKUN.usahaNama;
       if (JSON.stringify(L) !== JSON.stringify(S.setup.kelompok || null)) S.setup.kelompok = L;
     } else if (boleh("pengaturan")) {
       await SB.rpc("simpan_kelompok_usaha", { p_company: AKUN.usahaId, p_list: daftarKelompok() });
@@ -2784,7 +2817,7 @@ function viewRingkasan(R){
     ${kpi("Saldo Marketplace Belum Ditarik", rp(R.sum(["1-120","1-121","1-122"])), daftarOutlet().length > 1 ? "seluruh platform" : "")}
     ${kpi("Kas + Bank", rpS(kasBank))}
     ${kpi("Nilai Persediaan", rp(R.net("1-140")))}
-    ${kpi("Sisa PPh Final Disetor", rp(-R.net("2-130")), S.setup.pphAktif ? "Terutang " + rp(R.pphTerutang) : "PPh Final dimatikan")}
+    ${kpi("Sisa PPh Final Disetor", rp(-R.net("2-130")), R.pphAktif ? "Terutang " + rp(R.pphTerutang) : "PPh Final dimatikan")}
     ${R.pph22Total ? kpi("PPh 22 Dipungut Marketplace", rp(R.pph22Total), R.pphDikredit ? rp(R.pphDikredit) + " sudah jadi pengurang" : "kredit pajak di Neraca") : ""}
   </div>
   <div class="charts">
@@ -5779,7 +5812,10 @@ function viewFiskal(){
   const [dari, sampai] = rentangLaporan();
   const R = compute(dari, sampai);
   const PY = hitungPenyusutan(dari, sampai);
-  const s = S.setup;
+  /* aturan pajak (bentuk, PTKP, PPh Final) milik badan usaha yang dilihat */
+  const KT = kelompokTampil(), gF = KT[0] || null;
+  const s = Object.assign({}, S.setup, pajakKel(gF));
+  const fiskalBanyak = KT.length > 1 && KT.some(g => g.pajak);
 
   const opsPer = f => S.ops.filter(x => x.tgl >= dari && x.tgl <= sampai && inToko(x) && (x.fiskal || "Boleh dikurangkan") === f)
                            .reduce((a,x) => a + num(x.jumlah), 0);
@@ -5871,7 +5907,9 @@ function viewFiskal(){
   ].filter(Boolean) };
   return head("Rekonsiliasi Fiskal",
     "Menjembatani laba menurut pembukuan dengan penghasilan kena pajak. Beda tetap tidak akan pernah berbalik; beda temporer hanya soal waktu dan berbalik sendiri di tahun-tahun berikutnya.") +
-    toolbarLaporan() + catatan +
+    toolbarLaporan() + (fiskalBanyak ? `<div class="warnbox" style="margin-bottom:14px"><strong>Rekonsiliasi fiskal berlaku per wajib pajak.</strong>
+      Saringan toko saat ini mencakup ${KT.length} badan usaha, sedangkan angka di bawah memakai aturan pajak
+      <strong>${esc(pajakKel(gF).nama)}</strong>. Pilih toko satu badan usaha di saringan atas untuk hasil yang tepat.</div>` : "") + catatan +
     stmt(S.setup.nama, "Rekonsiliasi Fiskal · " + fmtD(dari) + " – " + fmtD(sampai), h) +
     tabelSusut;
 }
@@ -6107,7 +6145,7 @@ function viewLabaRugi(){
       ${R.ambang ? `<tr><td>Bagian yang bebas PPh Final (ambang Rp ${RE_ID.format(R.ambang)})</td>
         <td class="amt neg">(${rp(R.omzetBasis - R.dasarKena)})</td></tr>` : ""}
       <tr class="tot"><td>Dasar pengenaan pajak</td><td class="amt">${rp(R.dasarKena)}</td></tr>
-      <tr><td>PPh Final terutang ${S.setup.pphAktif ? "(" + (S.setup.tarifPph*100).toFixed(2) + "%)" : "— dimatikan"}</td>
+      <tr><td>PPh Final terutang ${R.pphAktif ? "(" + R.tarifTeks + ")" : "— dimatikan"}</td>
         <td class="amt">${rp(R.pphTerutang)}</td></tr>
       <tr><td>PPh 22 sudah dipungut marketplace</td><td class="amt neg">(${rp(R.pph22Total)})</td></tr>
       <tr class="tot"><td>Dipakai mengurangi PPh Final</td><td class="amt neg">(${rp(R.pphDikredit)})</td></tr>
@@ -6119,17 +6157,17 @@ function viewLabaRugi(){
         <td class="amt">${rp(R.pph22Total - R.pphDikredit)}</td></tr>` : ""}
     </table>
     ${(() => {
-      const th = Object.keys(R.brutoTahun).sort();
+      const th = R.pajakPer.flatMap(g => Object.keys(g.brutoTahun).sort().map(y => [g, y])), banyak = R.pajakPer.length > 1;
       if (!th.length) return "";
-      return th.map(y => {
-        const bruto = R.brutoTahun[y];
-        const sisa = Math.max(R.ambang - bruto, 0);
+      return th.map(([g, y]) => {
+        const bruto = g.brutoTahun[y];
+        const sisa = Math.max(g.ambang - bruto, 0);
         const lewat48 = bruto > 4800000000;
         return `<div class="${lewat48 ? "warnbox" : "hint"}" style="margin-top:14px">
-          <strong>Tahun pajak ${esc(y)}</strong> — peredaran bruto kumulatif sampai akhir rentang ini ${rp(bruto)}.
-          ${R.ambang ? (sisa > 0
-            ? `Masih ada ${rp(sisa)} lagi sebelum ambang Rp ${RE_ID.format(R.ambang)} terlampaui; selama itu PPh Final-nya nol.`
-            : `Ambang Rp ${RE_ID.format(R.ambang)} sudah terlampaui, jadi omzet setelahnya kena ${(S.setup.tarifPph*100).toFixed(2)}%.`)
+          <strong>${banyak ? esc(g.nama) + " · " : ""}Tahun pajak ${esc(y)}</strong> — peredaran bruto kumulatif sampai akhir rentang ini ${rp(bruto)}.
+          ${g.ambang ? (sisa > 0
+            ? `Masih ada ${rp(sisa)} lagi sebelum ambang Rp ${RE_ID.format(g.ambang)} terlampaui; selama itu PPh Final-nya nol.`
+            : `Ambang Rp ${RE_ID.format(g.ambang)} sudah terlampaui, jadi omzet setelahnya kena ${(g.tarif*100).toFixed(2)}%.`)
             : `Ambang Rp 500 juta tidak berlaku untuk badan usaha, jadi PPh Final dihitung sejak rupiah pertama.`}
           ${lewat48 ? ` <strong>Peredaran bruto sudah melewati Rp 4,8 miliar setahun.</strong> Di atas itu PPh Final 0,5% tidak berlaku lagi
             dan perhitungan pajaknya memakai ketentuan umum — angka di halaman ini berhenti bisa dipakai. Bicarakan dengan konsultan pajak.` : ""}
@@ -6138,7 +6176,7 @@ function viewLabaRugi(){
     })()}
     ${(() => {
       const M = {};
-      for (const [b,v] of Object.entries(R.pajakMasa)) M[b] = { dasar:v.kena, setor:0, kredit:0 };
+      for (const [b,v] of Object.entries(R.pajakMasa)) M[b] = { dasar:v.kena, pph:v.pph, setor:0, kredit:0 };
       /* PPh 22 yang sudah dipungut dibagi ke tiap masa sebanding dasar kenanya */
       for (const b of Object.keys(M))
         M[b].kredit = R.dasarKena ? R.pphDikredit * (M[b].dasar / R.dasarKena) : 0;
@@ -6148,12 +6186,12 @@ function viewLabaRugi(){
         const b = String(x.masa || "").slice(0,7) || String(x.tgl).slice(0,7);
         (M[b] ||= { dasar:0, setor:0, kredit:0 }); M[b].setor += num(x.jumlah); }
       const kunci = Object.keys(M).sort();
-      if (!kunci.length || !S.setup.pphAktif) return "";
+      if (!kunci.length || !R.pphAktif) return "";
       return `<div style="margin-top:16px">
         <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px">Per masa pajak</div>
         <table>
         <tr style="font-size:11px;color:var(--ink3)"><td>Masa</td><td class="amt">Kena Pajak</td><td class="amt">Terutang</td><td class="amt">PPh 22</td><td class="amt">Disetor</td><td class="amt">Sisa</td></tr>
-        ${kunci.map(b => { const t = M[b].dasar * num(S.setup.tarifPph);
+        ${kunci.map(b => { const t = M[b].pph || 0;
           const sisa = t - M[b].kredit - M[b].setor;
           return `<tr><td>${esc(labelBulan(b + "-01"))}</td>
             <td class="amt">${rp(M[b].dasar)}</td>
@@ -6622,9 +6660,9 @@ function viewPengguna(){
   if (GABUNGAN) return head("Pengguna & Akses", "Sub-akun sekarang diatur sekali untuk semua modul (Seller Fintech, Payroll, dan nanti Raksa).") +
     `<div class="card" style="padding:18px 20px; max-width:640px">
       <p style="margin:0 0 10px">Tambah orang, buat peran, dan centang hak per modul — misalnya <em>Seller Fintech: input data</em>
-      tanpa akses gaji — di halaman <strong>Pengguna &amp; Akses</strong> bersama.</p>
-      <a class="btn primary" href="/app/pengaturan/pengguna">Buka Pengguna &amp; Akses →</a>
-      <p style="margin:12px 0 0; color:var(--ink3); font-size:12.5px">Halaman itu bagian dari Payroll, jadi diminta verifikasi 2 langkah.</p>
+      tanpa akses gaji — di halaman <strong>Sub-akun &amp; peran</strong> Business Manager.</p>
+      <a class="btn primary" href="/pengguna">Buka Sub-akun &amp; peran di Business Manager ↗</a>
+      <p style="margin:12px 0 0; color:var(--ink3); font-size:12.5px">Sub-akun dan peran diatur sekali di Business Manager untuk semua aplikasi.</p>
     </div>`;
   const P = Object.entries(PERAN);
   const hakKunci = Object.keys(HAK_JUDUL);
@@ -6978,17 +7016,45 @@ function viewPaket(){
   </div></div>`;
 }
 
+/* Pengaturan → Pajak dalam mode Business Manager: dibaca dari Badan Usaha (per wajib pajak). */
+function pajakGabungan(s){
+  const baris = daftarKelompok().map(g => {
+    const p = pajakKel(g), op = p.bentuk !== "badan";
+    return `<tr><td>${esc(g.nama)}${g.namaResmi ? `<div style="font-size:11.5px;color:var(--ink3)">${esc(g.namaResmi)}</div>` : ""}</td>
+      <td>${op ? "Orang pribadi" : "Badan"}</td>
+      <td>${p.pkp ? "PKP · PPN " + (num(p.tarifPpn)*100).toFixed(2) + "%" : "Bukan PKP"}</td>
+      <td>${p.pphAktif ? (num(p.tarifPph)*100).toFixed(2) + "%" : "Tidak dihitung"}</td>
+      <td class="r">${op ? "Rp " + RE_ID.format(num(p.ambang)) : "—"}</td>
+      <td>${op ? (p.kawin ? "K/" : "TK/") + Math.min(3, num(p.tanggungan)) : "—"}</td></tr>`;
+  }).join("");
+  return `<p style="color:var(--ink2); font-size:13px; margin:0 0 14px; max-width:66ch">
+      Status PKP, PPh Final, ambang Rp 500 juta dan PTKP melekat pada <em>wajib pajak</em>, jadi diatur per badan usaha
+      di Business Manager. Setiap baris penjualan dan pembelian memakai aturan badan usaha pemilik tokonya.
+      Angka di sini alat bantu pembukuan, bukan pengganti nasihat konsultan pajak.</p>
+    <div class="tablewrap" style="max-width:900px"><table>
+      <thead><tr><th>Badan usaha</th><th>Jenis WP</th><th>PPN</th><th>PPh Final</th><th class="r">Ambang bebas</th><th>PTKP</th></tr></thead>
+      <tbody>${baris}</tbody></table></div>
+    <div class="toolbar" style="margin:10px 0 18px"><a class="btn" href="/badan-usaha">Atur di Business Manager ↗</a></div>
+    <div class="grid2">
+      <div class="field"><label>Kerugian persediaan</label>
+        <select data-set="beritaAcara"><option value="0"${!s.beritaAcara?" selected":""}>Tanpa berita acara — koreksi fiskal positif</option><option value="1"${s.beritaAcara?" selected":""}>Didukung berita acara — boleh dikurangkan</option></select></div>
+      <div class="field"><label>PPh 22 dipungut marketplace</label>
+        <select data-set="pph22Kredit"><option value="1"${s.pph22Kredit!==false?" selected":""}>Kurangkan dari PPh Final terutang</option><option value="0"${s.pph22Kredit===false?" selected":""}>Biarkan sebagai kredit pajak saja</option></select></div>
+    </div>`;
+}
 function viewSetup(){
   const s = S.setup;
   return head("Pengaturan", "Periode di sini menentukan transaksi mana yang masuk ke seluruh laporan.") +
   `<div class="card"><div class="bd">
     <div class="grid2">
-      <div class="field"><label>Nama usaha</label><input type="text" data-set="nama" value="${esc(s.nama)}"></div>
+      ${GABUNGAN ? `<div class="field"><label>Nama grup usaha</label><input type="text" value="${esc(s.nama)}" disabled><span style="font-size:11px;color:var(--ink3)">diatur di Business Manager → Badan Usaha</span></div>`
+        : `<div class="field"><label>Nama usaha</label><input type="text" data-set="nama" value="${esc(s.nama)}"></div>`}
       <div class="field"><label>Periode mulai</label><input type="date" data-set="mulai" value="${s.mulai}"></div>
       <div class="field"><label>Periode akhir</label><input type="date" data-set="akhir" value="${s.akhir}"></div>
     </div>
     <div style="height:22px"></div>
     <h2 style="font-size:17px; margin-bottom:4px">Pajak</h2>
+${GABUNGAN ? pajakGabungan(s) : `
     <p style="color:var(--ink2); font-size:13px; margin:0 0 14px; max-width:66ch">
       Umumnya usaha memakai PPh Final 0,5% <em>atau</em> PPN sebagai PKP, bukan keduanya. Matikan yang tidak berlaku.
       Untuk Wajib Pajak orang pribadi, peredaran bruto Rp 500 juta pertama tiap tahun pajak bebas PPh Final (PP 55/2022);
@@ -7015,6 +7081,7 @@ function viewSetup(){
       <div class="field"><label>PPh 22 dipungut marketplace</label>
         <select data-set="pph22Kredit"><option value="1"${s.pph22Kredit!==false?" selected":""}>Kurangkan dari PPh Final terutang</option><option value="0"${s.pph22Kredit===false?" selected":""}>Biarkan sebagai kredit pajak saja</option></select></div>
     </div>
+    `}
     <div style="height:26px"></div>
     <h2 style="font-size:17px; margin-bottom:4px">Persediaan, Harga Pokok &amp; Penyusutan</h2>
     <p style="color:var(--ink2); font-size:13px; margin:0 0 14px; max-width:66ch">
@@ -7490,16 +7557,16 @@ function tabelPajakPdf(R){
   it("Peredaran bruto rentang ini", R.omzetBasis);
   if (R.ambang) it("Bagian yang bebas PPh Final (ambang Rp " + RE_ID.format(R.ambang) + ")", -(R.omzetBasis - R.dasarKena));
   b.push({ jenis:"tot", sel:["Dasar pengenaan pajak", rpS(R.dasarKena)] });
-  it("PPh Final terutang" + (S.setup.pphAktif ? " (" + (S.setup.tarifPph*100).toFixed(2) + "%)" : " — dimatikan"), R.pphTerutang);
+  it("PPh Final terutang" + (R.pphAktif ? " (" + R.tarifTeks + ")" : " — dimatikan"), R.pphTerutang);
   it("PPh 22 sudah dipungut marketplace", -R.pph22Total);
   it("Dipakai mengurangi PPh Final", -R.pphDikredit);
   it("Sudah disetor sendiri lewat kode billing", -R.pphDisetor);
   b.push({ jenis:"grand", sel:["Sisa yang belum disetor", rpS(R.pphTerutang - R.pphDikredit - R.pphDisetor)] });
   const masa = Object.keys(R.pajakMasa).sort();
-  if (masa.length && S.setup.pphAktif){
+  if (masa.length && R.pphAktif){
     b.push({ jenis:"sec", sel:["Per masa pajak"] });
     for (const m of masa){
-      const t = R.pajakMasa[m].kena * num(S.setup.tarifPph);
+      const t = R.pajakMasa[m].pph;
       b.push({ jenis:"sub", sel:[labelBulan(m + "-01") + " — kena pajak " + rp(R.pajakMasa[m].kena), rpS(t)] });
     }
   }
