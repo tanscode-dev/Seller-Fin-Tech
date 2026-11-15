@@ -566,6 +566,7 @@ const COA = [
  ["1-122","Piutang Marketplace — Lazada","Aset Lancar","D"],
  ["1-125","Piutang Pesanan Belum Dicairkan","Aset Lancar","D"],
  ["1-130","Piutang Lain-lain","Aset Lancar","D"],
+ ["1-131","Piutang Karyawan (Kasbon)","Aset Lancar","D"],
  ["1-135","Piutang Antar Badan Usaha","Aset Lancar","D"],
  ["1-140","Persediaan Barang Dagang","Aset Lancar","D"],
  ["1-150","PPN Masukan","Aset Lancar","D"],
@@ -583,6 +584,8 @@ const COA = [
  ["2-120","PPN Keluaran","Kewajiban","K"],
  ["2-130","Utang PPh Final UMKM","Kewajiban","K"],
  ["2-140","Utang Gaji","Kewajiban","K"],
+ ["2-141","Utang PPh 21 Karyawan","Kewajiban","K"],
+ ["2-142","Utang BPJS","Kewajiban","K"],
  ["3-100","Modal Pemilik","Ekuitas","K"],
  ["3-110","Prive (Pengambilan Pemilik)","Ekuitas","D"],
  ["4-100","Penjualan Bruto","Pendapatan","K"],
@@ -602,6 +605,7 @@ const COA = [
  ["6-160","Beban Komisi Afiliasi / AMS","Beban Marketplace","D"],
  ["6-170","Beban Marketplace Lainnya","Beban Marketplace","D"],
  ["7-100","Beban Gaji & Upah","Beban Operasional","D"],
+ ["7-105","Beban BPJS Ditanggung Perusahaan","Beban Operasional","D"],
  ["7-110","Beban Sewa","Beban Operasional","D"],
  ["7-120","Beban Listrik, Air & Internet","Beban Operasional","D"],
  ["7-130","Beban Packing & Perlengkapan","Beban Operasional","D"],
@@ -612,6 +616,7 @@ const COA = [
  ["7-180","Beban Lain-lain","Beban Operasional","D"],
  ["7-190","Kerugian Barang Retur & Hilang","Beban Operasional","D"],
  ["8-100","Pendapatan Lain-lain","Pendapatan Lain","K"],
+ ["8-105","Pendapatan Denda & Potongan Karyawan","Pendapatan Lain","K"],
  ["8-110","Ganti Rugi dari Marketplace","Pendapatan Lain","K"],
  ["8-200","Beban Bunga","Beban Lain","D"],
  ["9-100","Beban PPh Final UMKM","Pajak","D"],
@@ -1587,17 +1592,17 @@ function hitungBuku(m, a){
   const hpp = net("5-100") + net("5-110") + net("5-120");
   const labaKotor = penjualanNeto - hpp;
   const MP = ["6-100","6-110","6-120","6-130","6-140","6-145","6-150","6-160","6-170"];
-  const OPX = ["7-100","7-110","7-120","7-130","7-140","7-150","7-160","7-170","7-180","7-190"];
+  const OPX = ["7-100","7-105","7-110","7-120","7-130","7-140","7-150","7-160","7-170","7-180","7-190"];
   const bebanMp = sum(MP), bebanOps = sum(OPX);
   const labaUsaha = labaKotor - bebanMp - bebanOps;
-  const lain = -net("8-100") - net("8-110") - net("8-200");
+  const lain = -net("8-100") - net("8-105") - net("8-110") - net("8-200");
   const ebt = labaUsaha + lain;
   const pajak = net("9-100");
   const labaBersih = ebt - pajak;
 
-  const ASET_L = ["1-100","1-110","1-120","1-121","1-122","1-125","1-130","1-135","1-140","1-150","1-160","1-170"];
+  const ASET_L = ["1-100","1-110","1-120","1-121","1-122","1-125","1-130","1-131","1-135","1-140","1-150","1-160","1-170"];
   const ASET_T = ["1-200","1-201","1-202","1-210","1-211","1-212"];
-  const KWJ = ["2-100","2-110","2-115","2-120","2-130","2-140"];
+  const KWJ = ["2-100","2-110","2-115","2-120","2-130","2-140","2-141","2-142"];
   const totAset = sum(ASET_L) + sum(ASET_T);
   const totKwj = -sum(KWJ);
   const totEkuitas = -net("3-100") - net("3-110") + labaBersih;
@@ -2171,6 +2176,48 @@ async function muatBeliInvoice(){
     }
   } catch(e){}
 }
+/* ===== Jurnal gaji otomatis dari PayrollKu (Business Manager) =====
+   Payroll yang sudah DIKUNCI masuk sebagai jurnal per badan usaha (baca-saja, disegarkan setiap
+   buku dimuat): beban gaji 7-100 & BPJS perusahaan 7-105; utang PPh 21 (2-141) & BPJS (2-142);
+   potongan kasbon mengurangi Piutang Karyawan (1-131); denda telat & denda Raksa jadi
+   Pendapatan Denda & Potongan Karyawan (8-105); gaji bersih dibayar dari Bank (1-110).
+   Karyawan "per paket" dibebankan ke badan usaha lain lewat 1-135/2-115.
+   Kasbon yang dicairkan: 1-131 / Kas. Denda Raksa hanya dijurnal lewat payroll (tidak dobel),
+   pembelian tetap dari Invoice, pesanan tetap dari Raksa. */
+const DARI_PAY = x => x && x.sumber === "payroll";
+let PAY_INFO = null;
+function terapkanJurnalPayroll(d){
+  if (!d) return false;
+  const K = petaKelompok(), gDef = kelompokInvoice();
+  const tujuan = id => {
+    const g = K.byId.get(id) || gDef;
+    const o0 = String((g && g.outlets[0]) || "shopee|").split("|");
+    return { plat: o0[0] || "shopee", toko: o0[1] || "", kel: g ? g.id : undefined };
+  };
+  const lama = S.jurnal.filter(DARI_PAY), baru = [];
+  for (const j of [...(d.gaji || []), ...(d.kasbon || [])]){
+    const o = tujuan(j.kelompok);
+    const baris = (j.baris || []).map(l => ({ kode: String(l.kode), d: Math.round(num(l.d)), k: Math.round(num(l.k)) }));
+    if (!baris.length) continue;
+    baru.push({ tgl: String(j.tgl || "").slice(0, 10), ket: j.ket || "Gaji", plat: o.plat, toko: o.toko, kelompok: o.kel,
+      sumber: "payroll", payId: j.id, baris });
+  }
+  PAY_INFO = { gaji: (d.gaji || []).length, kasbon: (d.kasbon || []).length };
+  if (JSON.stringify(lama) === JSON.stringify(baru)) return false;
+  S.jurnal = S.jurnal.filter(x => !DARI_PAY(x)).concat(baru);
+  return true;
+}
+async function muatJurnalPayroll(){
+  if (!GABUNGAN || !SB || !AKUN || !AKUN.usahaId) return;
+  try {
+    const { data, error } = await SB.rpc("seller_jurnal_payroll", { p_company: AKUN.usahaId });
+    if (error || !data) return;
+    if (terapkanJurnalPayroll(data)){
+      if (boleh("input") || boleh("pengaturan")) save(); else { segarkanPeta(); HASIL.clear(); REKAP.clear(); }
+      render();
+    }
+  } catch(e){}
+}
 /* ===== Pesanan harian dari Raksa =====
    Pesanan yang ditarik robot Raksa masuk ke Pesanan Seller (1 baris per SKU, nomor pesanan,
    status terbaru). Tidak disimpan ke buku — selalu diambil ulang saat Seller dibuka,
@@ -2240,7 +2287,7 @@ async function muatBuku(usahaBaru){
     await simpanJauh();
     note(!jauh && adaIsi(S) ? "Pembukuan perangkat ini diangkat ke server" : "Tersimpan di server");
   } else note("Tersinkron dengan server");
-  muatBeliInvoice();
+  muatBeliInvoice().then(muatJurnalPayroll);
   muatPesananRaksa();
 }
 /* Status langganan akun ini. Hanya dibaca kalau langganan sudah dinyalakan,
@@ -6021,6 +6068,13 @@ function viewJurnal(){
 
   const kartu = S.jurnal.map((j, i) => {
     const B = jurnalBaris(j), T = totalJurnal(j), ok = jurnalSeimbang(j);
+    if (DARI_PAY(j)) return `<div class="card" style="margin-bottom:14px"><div class="bd">
+      <div class="toolbar" style="margin:0 0 8px"><strong>${esc(String(j.tgl || "").split("-").reverse().join("/"))} · ${esc(j.ket || "")}</strong>
+        <span class="chip ok"><span class="dot"></span>Otomatis dari PayrollKu · baca-saja</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Akun</th><th class="r" style="width:170px">Debit</th><th class="r" style="width:170px">Kredit</th></tr></thead>
+        <tbody>${B.map(l => `<tr><td>${esc(l.kode)} · ${esc(NAMA[l.kode] || "")}</td><td class="num">${num(l.d) ? rp(num(l.d)) : "—"}</td><td class="num">${num(l.k) ? rp(num(l.k)) : "—"}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td><strong>Total</strong></td><td class="calc"><strong>${rp(T.d)}</strong></td><td class="calc"><strong>${rp(T.k)}</strong></td></tr></tfoot>
+      </table></div></div></div>`;
     const baris = B.map((l, li) => `<tr>
       <td><select data-jl="${i}:${li}:kode">${opsiAkun(l.kode)}</select></td>
       <td><input class="num n" data-jl="${i}:${li}:d" value="${num(l.d) ? RE_ID.format(num(l.d)) : ""}" inputmode="numeric" placeholder="—"></td>
@@ -6051,8 +6105,13 @@ function viewJurnal(){
   }).join("");
 
   const timpang = S.jurnal.filter(j => !jurnalSeimbang(j)).length;
+  /* gaji yang juga dicatat manual di bulan yang sudah ada jurnal PayrollKu → kemungkinan dobel */
+  const blnPay = new Set(S.jurnal.filter(DARI_PAY).filter(j => jurnalBaris(j).some(l => l.kode === "7-100")).map(j => String(j.tgl).slice(0, 7)));
+  const dobelGaji = blnPay.size ? [...S.ops.filter(x => x.kode === "7-100" && blnPay.has(String(x.tgl).slice(0, 7))),
+    ...S.jurnal.filter(j => !DARI_PAY(j) && blnPay.has(String(j.tgl).slice(0, 7)) && jurnalBaris(j).some(l => l.kode === "7-100" && num(l.d)))].length : 0;
   return `
   <div class="pagehead"><h1>Jurnal Manual</h1>${pandu(esc(PANDUAN.jurnal))}</div>
+  ${dobelGaji ? `<div class="warnbox"><strong>Kemungkinan gaji tercatat dua kali.</strong> Ada ${dobelGaji} catatan Beban Gaji (7-100) manual di bulan yang gajinya sudah masuk otomatis dari PayrollKu. Hapus catatan manual itu bila isinya gaji yang sama.</div>` : ""}
   <div class="toolbar">
     <button class="btn primary" data-add="jurnal">+ Jurnal baru</button>
     <button class="btn" data-import="jurnal">Impor file</button>
@@ -6307,9 +6366,9 @@ const AK_GRUP = {
   nonKas:  [["1-210","Beban penyusutan peralatan"],["1-211","Beban penyusutan kendaraan"],["1-212","Beban penyusutan bangunan"]],
   kerja:   [["1-120","Piutang Marketplace — Shopee"],["1-121","Piutang Marketplace — TikTok Shop"],
             ["1-122","Piutang Marketplace — Lazada"],["1-125","Piutang pesanan belum dicairkan"],
-            ["1-130","Piutang lain-lain"],["1-140","Persediaan barang dagang"],["1-150","PPN Masukan"],
+            ["1-130","Piutang lain-lain"],["1-131","Piutang karyawan (kasbon)"],["1-140","Persediaan barang dagang"],["1-150","PPN Masukan"],
             ["1-160","Biaya dibayar di muka"],["1-170","PPh 22 dipungut marketplace"],
-            ["2-100","Utang usaha (supplier)"],["2-120","PPN Keluaran"],["2-130","Utang PPh Final"],["2-140","Utang gaji"]],
+            ["2-100","Utang usaha (supplier)"],["2-120","PPN Keluaran"],["2-130","Utang PPh Final"],["2-140","Utang gaji"],["2-141","Utang PPh 21 karyawan"],["2-142","Utang BPJS"]],
   investasi:[["1-200","Pembelian peralatan & inventaris"],["1-201","Pembelian kendaraan"],["1-202","Pembelian bangunan"]],
   danaan:  [["2-110","Utang lain-lain / pinjaman"],["3-100","Setoran modal pemilik"],["3-110","Prive pemilik"]],
 };
@@ -7360,6 +7419,7 @@ function defLabaRugiRows(R0){
   tot("Laba usaha", C => C.R.labaUsaha);
   sec("Pendapatan & beban lain");
   it("Pendapatan lain-lain", C => -C.R.net("8-100"));
+  if (R0.net("8-105")) it("Pendapatan denda & potongan karyawan", C => -C.R.net("8-105"));
   if (R0.net("8-110")) it("Ganti rugi dari marketplace", C => -C.R.net("8-110"));
   it("Beban bunga", C => -C.R.net("8-200"));
   tot("Laba sebelum pajak", C => C.R.ebt);
