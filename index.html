@@ -483,6 +483,7 @@ dialog .db{max-height:min(70vh,620px); overflow-y:auto}
   .content{padding:20px 16px 60px}
   .topbar{padding:12px 16px}
 }
+.brand-logo{width:34px;height:34px;display:block;margin-bottom:8px;border-radius:9px;box-shadow:0 4px 12px rgb(0 0 0/.18)}
 </style>
 
 <div class="gate" id="gate">
@@ -506,6 +507,7 @@ dialog .db{max-height:min(70vh,620px); overflow-y:auto}
 <div class="app" id="app" hidden>
   <aside class="rail">
     <div class="brand">
+      <svg class="brand-logo" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="slg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#c2410c"/></linearGradient></defs><rect width="40" height="40" rx="11" fill="url(#slg)"/><path d="M15.5 15v-2.2a4.5 4.5 0 0 1 9 0V15" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><path d="M10.5 15h19l-1.5 15.3a2 2 0 0 1-2 1.7H14a2 2 0 0 1-2-1.7z" fill="#fff"/><path d="M15 27l3.3-3.3 2.6 2.4 4.4-4.6" fill="none" stroke="#c2410c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span class="mark">SELLER FIN TECH</span>
       <span class="sub">Pembukuan E-Commerce</span>
       <select id="pilih-usaha" class="pilih-usaha" hidden aria-label="Pilih usaha"></select>
@@ -513,9 +515,9 @@ dialog .db{max-height:min(70vh,620px); overflow-y:auto}
     <div class="bm-switch" id="nav-payroll" hidden><span class="lbl">Business Manager</span>
       <a class="bm-item ke-beranda" href="/mulai" hidden><span class="pr-dot" style="background:#94a3b8"></span>Beranda</a>
       <span class="bm-item aktif"><span class="pr-dot" style="background:currentColor"></span>Seller Fintech</span>
-      <a class="bm-item ke-payroll" href="https://business-manager-tanscode.vercel.app/app"><span class="pr-dot" style="background:#5b74e6"></span>PayrollKu</a>
-      <a class="bm-item ke-luar" id="ke-raksa" href="https://raksa-mu.vercel.app" hidden><span class="pr-dot" style="background:#d99a1e"></span>Raksa</a>
-      <a class="bm-item ke-luar" id="ke-invoice" href="https://penerimaan-barang-ten.vercel.app" hidden><span class="pr-dot" style="background:#9b4fd0"></span>Invoice Manager</a>
+      <a class="bm-item ke-payroll" href="https://business-manager-tanscode.vercel.app/app"><span class="pr-dot" style="background:#7c3aed"></span>PayrollKu</a>
+      <a class="bm-item ke-luar" id="ke-raksa" href="https://raksa-mu.vercel.app" hidden><span class="pr-dot" style="background:#2fb88c"></span>Raksa</a>
+      <a class="bm-item ke-luar" id="ke-invoice" href="https://penerimaan-barang-ten.vercel.app" hidden><span class="pr-dot" style="background:#2f5bea"></span>Invoice Manager</a>
     </div>
     <div class="navgroup"><span class="lbl">Ringkasan</span><div class="nav" id="nav-a"></div></div>
     <div class="navgroup"><span class="lbl">Data Masuk</span><div class="nav" id="nav-b"></div></div>
@@ -2176,6 +2178,223 @@ async function muatBeliInvoice(){
     }
   } catch(e){}
 }
+/* ===== Rekening Koran Bank (impor e-Statement PDF) =====
+   PDF e-Statement BCA dibaca di browser (pdf.js), dicek dengan ringkasan di halaman terakhir
+   (saldo awal + mutasi CR − mutasi DB = saldo akhir), lalu tiap baris:
+   1) dicocokkan dulu dengan mutasi Bank (1-110) yang SUDAH ada di buku (penarikan marketplace,
+      pembayaran Invoice, biaya, setoran pajak, impor rek koran sebelumnya, dll.) — jumlah sama,
+      tanggal ±5 hari → "Sudah tercatat", tidak dicatat lagi (anti dobel);
+   2) transfer gaji ke karyawan → sudah dicatat oleh jurnal PayrollKu (bila payroll bulan itu dikunci);
+   3) sisanya diberi saran akun (penarikan Shopee/TikTok/Lazada, prive, biaya bank, bunga, pajak, …)
+      yang bisa diganti sebelum dimasukkan sebagai jurnal (sumber "rekkoran"). */
+const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+let pdfJanji = null, RK = null, RK_NAMA = null;
+function siapkanPdf(){
+  if (window.pdfjsLib) return Promise.resolve(true);
+  if (!pdfJanji) pdfJanji = new Promise(res => {
+    const sc = document.createElement("script"); sc.src = PDFJS_URL;
+    sc.onload = () => { if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; res(!!window.pdfjsLib); };
+    sc.onerror = () => { pdfJanji = null; res(false); };
+    document.head.appendChild(sc);
+  });
+  return pdfJanji;
+}
+function rkBarisItem(items){
+  const rows = [];
+  for (const it of [...items].filter(i => i.s.trim()).sort((a, b) => b.y - a.y || a.x - b.x)){
+    let r = rows.find(r => Math.abs(r.y - it.y) < 2.5);
+    if (!r){ r = { y: it.y, items: [] }; rows.push(r); }
+    r.items.push(it);
+  }
+  return rows.map(r => ({ y: r.y, items: r.items.sort((a, b) => a.x - b.x) }));
+}
+function bacaRekKoranBCA(halaman){
+  const angka = s => Number(String(s).replace(/,/g, ""));
+  const out = { bank: "BCA", rekening: "", pemilik: "", periode: "", tahun: 0, bulan: 0, saldoAwal: null, saldoAkhir: null,
+                totalCR: null, totalDB: null, jumlahCR: null, jumlahDB: null, baris: [] };
+  const BLN = ["JANUARI","FEBRUARI","MARET","APRIL","MEI","JUNI","JULI","AGUSTUS","SEPTEMBER","OKTOBER","NOVEMBER","DESEMBER"];
+  let kolMutasi = null, kolSaldo = null, kolKet = null, kolCbg = null, cur = null;
+  const rapat = s => s.replace(/\s+/g, "");
+  for (const items of halaman){
+    for (const r of rkBarisItem(items)){
+      const teks = r.items.map(i => i.s).join(" ").replace(/\s+/g, " ").trim();
+      const tr = rapat(teks).toUpperCase();
+      let m;
+      if ((m = tr.match(/NO\.?REKENING:?(\d{6,})/))) out.rekening = m[1];
+      if ((m = tr.match(/PERIODE:?([A-Z]+)(\d{4})/))){ out.bulan = BLN.indexOf(m[1]) + 1; out.tahun = +m[2]; out.periode = m[1] + " " + m[2]; }
+      if (!out.pemilik && /NO\.?REKENING/.test(tr)) out.pemilik = tr.split(/NO\.?REKENING/)[0].replace(/[^A-Z]/g, "");
+      if (/TANGGAL/.test(tr) && /KETERANGAN/.test(tr) && /MUTASI/.test(tr)){
+        for (const i of r.items){ const u = rapat(i.s).toUpperCase();
+          if (u.startsWith("MUTASI")) kolMutasi = i.x; else if (u.startsWith("SALDO")) kolSaldo = i.x;
+          else if (u.startsWith("KETERANGAN")) kolKet = i.x; else if (u === "CBG") kolCbg = i.x; }
+        cur = null; continue;
+      }
+      if ((m = tr.match(/^SALDOAWAL:([\d,]+\.\d{2})$/))){ out.saldoAwal = angka(m[1]); cur = null; continue; }
+      if ((m = tr.match(/^MUTASICR:([\d,]+\.\d{2})(\d+)$/))){ out.totalCR = angka(m[1]); out.jumlahCR = +m[2]; cur = null; continue; }
+      if ((m = tr.match(/^MUTASIDB:([\d,]+\.\d{2})(\d+)$/))){ out.totalDB = angka(m[1]); out.jumlahDB = +m[2]; continue; }
+      if ((m = tr.match(/^SALDOAKHIR:([\d,]+\.\d{2})$/))){ out.saldoAkhir = angka(m[1]); continue; }
+      if (/BERSAMBUNG/.test(tr)){ cur = null; continue; }
+      if (kolMutasi == null) continue;
+      const p0 = r.items[0];
+      const tgl = /^\d{2}\/\d{2}$/.test(p0.s.trim()) && p0.x < (kolKet ?? 120) ? p0.s.trim() : null;
+      let mutasi = null, db = false, saldo = null; const ket = [];
+      for (const i of (tgl ? r.items.slice(1) : r.items)){
+        const s = i.s.trim();
+        if (/^[\d,]+\.\d{2}$/.test(s) && i.x > kolMutasi - 60){ if (kolSaldo != null && i.x > kolSaldo - 40) saldo = angka(s); else mutasi = angka(s); }
+        else if (s === "DB" && i.x > kolMutasi - 60) db = true;
+        else if (kolCbg != null && /^\d{3,4}$/.test(s) && Math.abs(i.x - kolCbg) < 30) {}
+        else ket.push(s);
+      }
+      if (tgl){
+        const k0 = ket.join(" ").replace(/\s+/g, " ").trim();
+        if (/^SALDO AWAL/i.test(k0)){ if (out.saldoAwal == null && saldo != null) out.saldoAwal = saldo; cur = null; continue; }
+        cur = { tgl, jenis: k0, ket: [], jumlah: mutasi, arah: db ? "DB" : "CR", saldo };
+        out.baris.push(cur);
+      } else if (cur){
+        if (mutasi != null && cur.jumlah == null){ cur.jumlah = mutasi; cur.arah = db ? "DB" : "CR"; }
+        if (saldo != null) cur.saldo = saldo;
+        const t = ket.join(" ").trim(); if (t) cur.ket.push(t);
+      }
+    }
+  }
+  const th = out.tahun || new Date().getFullYear();
+  out.baris.forEach((b, i) => {
+    const [d, mo] = b.tgl.split("/").map(Number);
+    b.tanggal = `${th}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    b.uraian = [b.jenis, ...b.ket].join(" · ");
+    b.id = `bca:${out.rekening}:${b.tanggal}:${i}:${b.arah}:${Math.round((b.jumlah || 0) * 100)}`;
+  });
+  const sum = a => Math.round(a.reduce((t, b) => t + (b.jumlah || 0), 0) * 100) / 100;
+  const cr = out.baris.filter(b => b.arah === "CR"), dbs = out.baris.filter(b => b.arah === "DB");
+  out.cek = { cr: sum(cr), db: sum(dbs), nCR: cr.length, nDB: dbs.length,
+    cocok: out.totalCR != null && Math.abs(sum(cr) - out.totalCR) < 0.01 && Math.abs(sum(dbs) - out.totalDB) < 0.01 && cr.length === out.jumlahCR && dbs.length === out.jumlahDB,
+    saldoCocok: out.saldoAwal != null && out.saldoAkhir != null && Math.abs(out.saldoAwal + sum(cr) - sum(dbs) - out.saldoAkhir) < 0.01,
+    tanpaJumlah: out.baris.filter(b => b.jumlah == null).length };
+  return out;
+}
+async function muatNamaKaryawanRk(){
+  if (RK_NAMA) return RK_NAMA;
+  RK_NAMA = [];
+  try { if (GABUNGAN && SB && AKUN && AKUN.usahaId){ const { data } = await SB.rpc("seller_nama_karyawan", { p_company: AKUN.usahaId }); if (Array.isArray(data)) RK_NAMA = data.map(x => String(x).toUpperCase()); } } catch(e){}
+  return RK_NAMA;
+}
+const rkRapat = s => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+/* Saran akun untuk satu baris yang belum tercatat. Mengembalikan { kode, alasan, yakin }. */
+function rkSaran(b, ctx){
+  const u = b.uraian.toUpperCase(), r = rkRapat(b.uraian), masuk = b.arah === "CR";
+  const pemilik = ctx.pemilik && r.includes(ctx.pemilik.slice(0, 12));
+  if (masuk && /AIRPAY|SHOPEE/.test(u)) return { kode: "1-120", alasan: "Penarikan saldo Shopee", yakin: true };
+  if (masuk && /TOKOPEDIA|TIKTOK/.test(u)) return { kode: "1-121", alasan: "Penarikan saldo TikTok Shop", yakin: true };
+  if (masuk && /ECART|LAZADA/.test(u)) return { kode: "1-122", alasan: "Penarikan saldo Lazada", yakin: true };
+  if (/PAJAK BUNGA/.test(u)) return { kode: "7-150", alasan: "Pajak atas bunga bank", yakin: true };
+  if (masuk && /BUNGA/.test(u)) return { kode: "8-100", alasan: "Bunga bank", yakin: true };
+  if (!masuk && /BIAYA ADM|BIAYA TXN|BIAYA ADMIN|^BI-FAST DB · BIF BIAYA|BIF BIAYA/.test(u)) return { kode: "7-150", alasan: "Biaya administrasi bank", yakin: true };
+  if (!masuk && /PENERIMAAN NEGARA|MPN|DJP|PAJAK/.test(u)) return { kode: "2-130", alasan: "Setoran pajak", yakin: false };
+  if (!masuk && /PEMBAYARAN PINJ|ANGSURAN|KPR/.test(u)) return { kode: "2-110", alasan: "Angsuran pinjaman", yakin: false };
+  if (/TARIKAN TUNAI|SETORAN TUNAI/.test(u)) return { kode: "1-100", alasan: masuk ? "Setoran tunai dari kas" : "Tarik tunai ke kas", yakin: true };
+  if (!masuk && pemilik && !/GAJI/.test(u)) return { kode: "3-110", alasan: "Transfer ke pemilik (prive)", yakin: /PRIVE/.test(u) };
+  if (masuk && pemilik) return { kode: "3-100", alasan: "Setoran dari pemilik", yakin: false };
+  return masuk ? { kode: "8-100", alasan: "Uang masuk lain — periksa", yakin: false } : { kode: "7-180", alasan: "Uang keluar lain — periksa (supplier? biaya?)", yakin: false };
+}
+function rkGaji(b, nama){
+  if (b.arah !== "DB") return false;
+  const u = b.uraian.toUpperCase(), r = rkRapat(b.uraian);
+  if (/BIAYA/.test(u)) return false;   // mis. "BIF BIAYA TXN KE <nama>" = biaya transfer, bukan gaji
+  return /GAJI/.test(u) || nama.some(n => { const k = rkRapat(n); return k.length >= 6 && r.includes(k.slice(0, Math.min(k.length, 16))); });
+}
+/* Cocokkan dengan mutasi Bank yang sudah ada di buku. */
+function rkCocokkan(st){
+  const geser = (d, n) => { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  const tgls = st.baris.map(b => b.tanggal).sort();
+  const dari = geser(tgls[0], -5), sampai = geser(tgls[tgls.length - 1], 5);
+  let ada = [];
+  try { ada = bukuBesarData("1-110", dari < S.setup.mulai ? S.setup.mulai : dari, sampai).baris.map(e => ({ ...e, pakai: false })); } catch(e){ ada = []; }
+  const sudahRk = new Set(S.jurnal.filter(j => j.sumber === "rekkoran").map(j => j.rkId));
+  const blnPayroll = new Set(S.jurnal.filter(j => j.sumber === "payroll" && jurnalBaris(j).some(l => l.kode === "1-110" && num(l.k))).map(j => String(j.tgl).slice(0, 7)));
+  const selisihHari = (a, b) => Math.abs((new Date(a) - new Date(b)) / 864e5);
+  for (const b of st.baris){
+    b.status = null; b.cocok = "";
+    if (sudahRk.has(b.id)){ b.status = "sudah"; b.cocok = "Sudah diimpor dari rek koran sebelumnya"; continue; }
+    const kandidat = ada.filter(e => !e.pakai && Math.abs((b.arah === "CR" ? e.d : e.c) - b.jumlah) < 0.5 && selisihHari(e.t, b.tanggal) <= 5)
+      .sort((x, y) => selisihHari(x.t, b.tanggal) - selisihHari(y.t, b.tanggal));
+    if (kandidat.length){ kandidat[0].pakai = true; b.status = "sudah"; b.cocok = `Sudah tercatat ${fmtD(kandidat[0].t)} · ${kandidat[0].ket}`; continue; }
+    if (rkGaji(b, st.nama)){
+      if (blnPayroll.has(b.tanggal.slice(0, 7))){ b.status = "sudah"; b.cocok = "Gaji — sudah tercatat lewat jurnal PayrollKu (total gaji bulan ini)"; continue; }
+      b.saran = { kode: "7-100", alasan: "Gaji karyawan (payroll bulan ini belum dikunci di PayrollKu)", yakin: false };
+    } else b.saran = rkSaran(b, st);
+    b.status = "baru"; b.akun = b.saran.kode; b.pilih = true;
+  }
+}
+async function bukaRekKoran(file){
+  if (!(await siapkanPdf())) { pesan("Pembaca PDF gagal dimuat. Periksa koneksi internet lalu coba lagi.", "Gagal"); return; }
+  const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const hal = [];
+  for (let i = 1; i <= doc.numPages; i++){
+    const tc = await (await doc.getPage(i)).getTextContent();
+    hal.push(tc.items.map(it => ({ s: it.str, x: it.transform[4], y: it.transform[5] })));
+  }
+  const st = bacaRekKoranBCA(hal);
+  if (!st.baris.length){ pesan("Tidak ada transaksi yang terbaca. Saat ini yang didukung: e-Statement BCA (PDF asli dari KlikBCA/myBCA, bukan hasil scan/foto).", "Format belum dikenali"); return; }
+  st.file = file.name; st.nama = await muatNamaKaryawanRk();
+  rkCocokkan(st);
+  RK = st; render();
+}
+function viewRekKoran(){
+  const L = daftarKelompok(), K = petaKelompok();
+  S.ui = S.ui || {};
+  const badan = S.ui.rkBadan && K.byId.get(S.ui.rkBadan) ? S.ui.rkBadan : (L[0] && L[0].id) || "";
+  const head0 = `<div class="pagehead"><h1>Rekening Koran Bank</h1>
+    <p>Unggah e-Statement PDF dari bank. Transaksi yang sudah ada di buku (penarikan marketplace, pembayaran Invoice, gaji PayrollKu, biaya, setoran pajak, impor sebelumnya) otomatis ditandai <b>sudah tercatat</b> dan tidak dicatat dua kali. Sisanya diberi saran akun yang bisa Anda ganti sebelum dimasukkan.</p></div>`;
+  const pilihBadan = L.length > 1 ? `<div class="field" style="max-width:260px"><label>Rekening ini milik</label><select id="rk-badan">${L.map(g => `<option value="${esc(g.id)}"${g.id === badan ? " selected" : ""}>${esc(g.nama)}</option>`).join("")}</select></div>` : "";
+  const unggah = `<div class="toolbar">${pilihBadan}<div class="field"><label>File e-Statement (PDF)</label><input type="file" id="rk-file" accept="application/pdf,.pdf"></div>
+    ${RK ? `<button class="btn" id="rk-reset" style="align-self:flex-end">Tutup file</button>` : ""}</div>
+    <p class="status">Didukung sekarang: BCA (Tahapan/Giro, PDF asli). Bank lain menyusul — kirimkan contoh PDF-nya.</p>`;
+  if (!RK) return head0 + unggah;
+  const c = RK.cek, baru = RK.baris.filter(b => b.status === "baru"), sudah = RK.baris.filter(b => b.status === "sudah");
+  const dipilih = baru.filter(b => b.pilih);
+  const opsi = kode => COA.map(([k, n]) => `<option value="${k}"${k === kode ? " selected" : ""}>${k} · ${esc(n)}</option>`).join("");
+  const ok = c.cocok && c.saldoCocok && !c.tanpaJumlah;
+  return head0 + unggah + `
+  <div class="card" style="margin:12px 0"><div class="bd">
+    <strong>${esc(RK.bank)} · ${esc(RK.rekening)} · ${esc(RK.periode)}</strong> <span class="status">${esc(RK.file)}</span>
+    <div class="status" style="margin-top:6px">Saldo awal ${rp(RK.saldoAwal)} · Masuk ${rp(c.cr)} (${c.nCR}) · Keluar ${rp(c.db)} (${c.nDB}) · Saldo akhir ${rp(RK.saldoAkhir)}</div>
+    <div style="margin-top:6px">${ok ? `<span class="chip ok"><span class="dot"></span>Cocok dengan ringkasan bank — semua ${RK.baris.length} transaksi terbaca</span>`
+      : `<span class="chip warn"><span class="dot"></span>Hasil baca tidak sama dengan ringkasan bank — periksa sebelum memasukkan</span>`}</div>
+    <div class="status" style="margin-top:6px">${sudah.length} sudah tercatat di buku · ${baru.length} belum tercatat</div>
+  </div></div>
+  ${baru.length ? `<div class="card" style="margin-bottom:14px"><div class="bd">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><strong>Belum tercatat</strong><span class="status">${dipilih.length} dipilih</span><span style="flex:1"></span>
+      ${boleh("input") ? `<button class="btn primary" id="rk-masukkan"${dipilih.length ? "" : " disabled"}>Masukkan ${dipilih.length} transaksi ke pembukuan</button>` : ""}</div>
+    <div class="tablewrap" style="margin-top:8px;max-height:520px;overflow:auto"><table><thead><tr><th style="width:28px"></th><th>Tanggal</th><th>Uraian</th><th class="num">Masuk</th><th class="num">Keluar</th><th style="min-width:260px">Akun lawan</th></tr></thead><tbody>
+    ${RK.baris.map((b, i) => b.status !== "baru" ? "" : `<tr><td><input type="checkbox" data-rk-pilih="${i}"${b.pilih ? " checked" : ""}></td><td>${fmtD(b.tanggal)}</td>
+      <td><div style="max-width:420px">${esc(b.uraian)}</div><div class="status"${b.saran.yakin ? "" : ' style="color:var(--warn)"'}>${esc(b.saran.alasan)}</div></td>
+      <td class="num">${b.arah === "CR" ? rp(b.jumlah) : "–"}</td><td class="num">${b.arah === "DB" ? rp(b.jumlah) : "–"}</td>
+      <td><select data-rk-akun="${i}">${opsi(b.akun)}</select></td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="status" style="margin-top:6px">Masuk: Bank (1-110) di debit, akun lawan di kredit. Keluar: akun lawan di debit, Bank di kredit. Penarikan marketplace yang belum ada di menu Penarikan Dana dicatat mengurangi piutang marketplace-nya.</p>
+  </div></div>` : ""}
+  <div class="card"><div class="bd"><strong>Sudah tercatat (${sudah.length})</strong>
+    <div class="tablewrap" style="margin-top:8px;max-height:360px;overflow:auto"><table><thead><tr><th>Tanggal</th><th>Uraian</th><th class="num">Masuk</th><th class="num">Keluar</th><th>Dicocokkan dengan</th></tr></thead><tbody>
+    ${sudah.map(b => `<tr><td>${fmtD(b.tanggal)}</td><td><div style="max-width:380px">${esc(b.uraian)}</div></td><td class="num">${b.arah === "CR" ? rp(b.jumlah) : "–"}</td><td class="num">${b.arah === "DB" ? rp(b.jumlah) : "–"}</td><td class="status">${esc(b.cocok)}</td></tr>`).join("")}
+    </tbody></table></div></div></div>`;
+}
+function rkMasukkan(){
+  if (!RK) return 0;
+  const K = petaKelompok(), g = K.byId.get(S.ui.rkBadan) || daftarKelompok()[0];
+  const o0 = String((g && g.outlets && g.outlets[0]) || "shopee|").split("|");
+  let n = 0;
+  for (const b of RK.baris){
+    if (b.status !== "baru" || !b.pilih || !b.jumlah) continue;
+    const lawan = b.akun || b.saran.kode, v = Math.round(b.jumlah * 100) / 100;
+    S.jurnal.push({ tgl: b.tanggal, ket: `Rek koran ${RK.bank} ${RK.rekening} · ${b.uraian}`.slice(0, 240), plat: o0[0] || "shopee", toko: o0[1] || "",
+      kelompok: g ? g.id : undefined, sumber: "rekkoran", rkId: b.id,
+      baris: b.arah === "CR" ? [{ kode: "1-110", d: v, k: 0 }, { kode: lawan, d: 0, k: v }] : [{ kode: lawan, d: v, k: 0 }, { kode: "1-110", d: 0, k: v }] });
+    b.status = "sudah"; b.cocok = "Baru saja dimasukkan"; n++;
+  }
+  return n;
+}
+
 /* ===== Jurnal gaji otomatis dari PayrollKu (Business Manager) =====
    Payroll yang sudah DIKUNCI masuk sebagai jurnal per badan usaha (baca-saja, disegarkan setiap
    buku dimuat): beban gaji 7-100 & BPJS perusahaan 7-105; utang PPh 21 (2-141) & BPJS (2-142);
@@ -2710,6 +2929,7 @@ const NAV = [
   ["b","mutasi","Mutasi Saldo Marketplace"],
   ["b","iklan","Iklan"],
   ["b","saldo","Penarikan Dana"],
+  ["b","rekkoran","Rekening Koran Bank"],
   ["b","beli","Pembelian"],
   ["b","antar","Jual-Beli Antar CV/PT"],
   ["b","ops","Biaya Operasional"],
@@ -2741,10 +2961,11 @@ const NAV_HAK = {
   rekon:"laporan", cutoff:"laporan", fiskal:"laporan", neracasaldo:"laporan", bukubesar:"laporan",
   akun:"pengaturan", setup:"pengaturan", pengguna:"pengguna", paket:"pengguna",
   income:"input", order:"input", adjust:"input", mutasi:"input", iklan:"input", manual:"input",
-  saldo:"input", beli:"input", antar:"input", ops:"input", aset:"input", pajak:"input", jurnal:"input",
+  saldo:"input", rekkoran:"input", beli:"input", antar:"input", ops:"input", aset:"input", pajak:"input", jurnal:"input",
   produk:"input", resep:"input", varian:"input", katalog:"input", katalogSet:"input",
 };
-const bolehHalaman = id => !NAV_HAK[id] || boleh(NAV_HAK[id]);
+/* Di Business Manager, sub-akun & peran diatur di BM → menu Pengguna & Akses Seller disembunyikan. */
+const bolehHalaman = id => !(id === "pengguna" && typeof GABUNGAN !== "undefined" && GABUNGAN) && (!NAV_HAK[id] || boleh(NAV_HAK[id]));
 const halamanPertama = () => boleh("laporan") ? "ringkasan" : boleh("input") ? "income" : "labarugi";
 
 function renderNav(){
@@ -2794,7 +3015,7 @@ function render(){
     neraca: () => viewNeraca(), aruskas: () => viewArusKas(),
     neracasaldo: () => viewNeracaSaldo(R), bukubesar: () => viewBukuBesar(), antar: () => viewAntar(), rekon: () => viewRekon(R), cutoff: () => viewCutoff(R),
     fiskal: () => viewFiskal(),
-    akun: () => viewAkun(R), setup: () => viewSetup(), paket: () => viewPaket(), pengguna: () => viewPengguna(),
+    akun: () => viewAkun(R), setup: () => viewSetup(), paket: () => viewPaket(), pengguna: () => viewPengguna(), rekkoran: () => viewRekKoran(),
   }[page])();
   if (page === "ringkasan") drawCharts(R);
 }
@@ -7976,6 +8197,12 @@ document.addEventListener("click", async e => {
   if (t.id === "tb-outlet" || t.id === "sku-outlet"){ bukaPilihToko(); return; }
   if (t.id === "sku-mentah"){ mentah = !mentah; render(); return; }
   if (t.id === "beli-mentah"){ mentahBeli = !mentahBeli; render(); return; }
+  if (t.id === "rk-reset"){ RK = null; render(); return; }
+  if (t.id === "rk-masukkan"){
+    const n = rkMasukkan();
+    if (n){ save(); pesan(`${n} transaksi rek koran masuk ke Jurnal Manual (bisa dilihat & diubah di sana).`); }
+    render(); return;
+  }
   if (t.id === "antar-setuju"){
     const b = S.ui.antarBulan || document.getElementById("antar-bulan").value, U = usulanAntar(b), tgl = akhirBulan(b);
     S.antar = (S.antar || []).concat(U.map(r => ({ id: "an" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7), bulan: b, tgl, kode: r.kode, qty: r.qty, dari: r.dari, ke: r.ke, modal: r.modal, harga: r.harga })));
@@ -8351,6 +8578,10 @@ document.addEventListener("change", e => {
   if (t.id === "lr-banding"){ (S.ui ||= {}).banding = t.value === "0" ? false : t.value; touch(); return; }
   if (t.id === "lr-mode"){ lrState().mode = t.value; touch(); return; }
   if (t.id === "antar-bulan"){ S.ui.antarBulan = t.value; render(); return; }
+  if (t.id === "rk-badan"){ S.ui.rkBadan = t.value; render(); return; }
+  if (t.id === "rk-file" && t.files && t.files[0]){ const f = t.files[0]; bukaRekKoran(f).catch(err => pesan("PDF tidak bisa dibaca: " + (err && err.message || err), "Gagal")); return; }
+  if (t.dataset && t.dataset.rkAkun != null && RK){ const b = RK.baris[+t.dataset.rkAkun]; if (b) b.akun = t.value; return; }
+  if (t.dataset && t.dataset.rkPilih != null && RK){ const b = RK.baris[+t.dataset.rkPilih]; if (b) b.pilih = t.checked; render(); return; }
   if (t.dataset && t.dataset.markup !== undefined){
     const id = t.dataset.markup, v = Math.max(0, Math.min(500, num(t.value)));
     const g = daftarKelompok().find(x => x.id === id); if (g) g.markup = v;
