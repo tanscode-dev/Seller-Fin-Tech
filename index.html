@@ -1,5 +1,6 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>Seller Fin Tech</title>
+<script>/* Business Manager: bar atas & tema bersama (Desain D) */if(/^\/seller(\/|$)/.test(location.pathname)&&!/github\.io$/.test(location.hostname))document.write('<link rel="stylesheet" href="/bm-tema.css"><script src="/bm-bar.js"><\/script>');</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -105,6 +106,36 @@ a.bm-item:hover{background:var(--surface2); color:var(--ink)}
 .pagehead{margin-bottom:20px}
 .pagehead h1{font-size:26px; letter-spacing:-.015em}
 .pagehead p{margin:6px 0 0; color:var(--ink2); max-width:68ch; font-size:13.5px}
+
+/* ---------- Business Manager · Desain D (hanya saat dibuka dari BM) ---------- */
+html.bm-ber-bar[data-app]{
+  --paper:var(--bm-bg); --surface:var(--bm-surface); --surface2:var(--bm-surface-2); --surface3:var(--bm-hover);
+  --line:var(--bm-border); --line2:var(--bm-border); --ink:var(--bm-fg); --ink2:var(--bm-fg-2); --ink3:var(--bm-muted);
+  --accent:var(--bm-acc); --accent-ink:#ffffff; --accent-soft:var(--bm-acc-soft);
+  --pos:var(--bm-ok); --neg:var(--bm-danger); --warn:var(--bm-warn); --warn-soft:var(--bm-warn-bg);
+  --shadow:0 1px 2px rgba(0,0,0,.04); --r:8px;
+}
+html.bm-ber-bar.dark[data-app]{--accent-ink:#0e1014; --shadow:0 1px 2px rgba(0,0,0,.4)}
+html.bm-ber-bar body{font-family:var(--bm-font)}
+html.bm-ber-bar h1,html.bm-ber-bar h2,html.bm-ber-bar h3,html.bm-ber-bar .topbar .store{font-family:var(--bm-font); font-weight:600; letter-spacing:0}
+html.bm-ber-bar .num,html.bm-ber-bar .n{font-family:var(--bm-mono)}
+html.bm-ber-bar .app{min-height:calc(100vh - var(--bm-bar-h))}
+html.bm-ber-bar .rail{top:var(--bm-bar-h); height:calc(100vh - var(--bm-bar-h)); background:var(--bm-side); border-right:1px solid var(--line); padding-top:12px}
+html.bm-ber-bar .main{border-left:0}
+html.bm-ber-bar .brand{border-bottom:0; padding:0 20px 4px; margin-bottom:8px}
+html.bm-ber-bar .brand .brand-logo,html.bm-ber-bar .brand .sub,html.bm-ber-bar .bm-switch,html.bm-ber-bar #btn-theme,html.bm-ber-bar #btn-keluar{display:none!important}
+html.bm-ber-bar .brand .mark{font:600 11px var(--bm-mono); letter-spacing:.06em; color:var(--ink3)}
+html.bm-ber-bar .navgroup > .lbl{font:600 10.5px var(--bm-mono); letter-spacing:.06em}
+html.bm-ber-bar .nav button{border-radius:6px; padding:6px 10px; transition:background-color .12s,color .12s}
+html.bm-ber-bar .nav button[aria-current="true"]{background:var(--surface); color:var(--ink); box-shadow:inset 3px 0 0 var(--accent),0 0 0 1px var(--line)}
+html.bm-ber-bar .topbar{top:var(--bm-bar-h); padding:8px 24px; min-height:44px; background:color-mix(in srgb,var(--paper) 90%,transparent)}
+html.bm-ber-bar .topbar .store{font-size:14px}
+html.bm-ber-bar .content{padding:20px 24px 80px}
+html.bm-ber-bar .pagehead h1{font-size:20px}
+html.bm-ber-bar .chip{border-radius:4px}
+html.bm-ber-bar .chip.ok{background:var(--bm-ok-bg); color:var(--bm-ok)}
+html.bm-ber-bar .chip.bad{background:var(--bm-danger-bg); color:var(--bm-danger); border-color:transparent}
+html.bm-ber-bar #view.bm-masuk{animation:bm-masuk .18s ease-out}
 
 /* ---------- panduan yang disembunyikan ----------
    Keterangan panjang tidak lagi memenuhi kepala halaman. Yang tampak hanya satu
@@ -3003,6 +3034,7 @@ function render(){
   ob.className = "btn" + (adaFilter() ? " primary" : "");
   renderNav();
   const v = document.getElementById("view");
+  if (render._hal !== page){ render._hal = page; v.classList.remove("bm-masuk"); void v.offsetWidth; v.classList.add("bm-masuk"); }
   v.innerHTML = (page === "order" && !mentah) ? viewSku()
     : (page === "jurnal" && !mentah) ? viewJurnal()
     : (page === "aset") ? viewAset()
@@ -10399,7 +10431,9 @@ function loadDemo(){
 }
 
 /* ============================ mulai ============================ */
-try { const th = localStorage.getItem("bbl:theme"); if (th) document.documentElement.setAttribute("data-theme", th); } catch(e){}
+try { const th = localStorage.getItem("bbl:theme"); if (th && !window.BMTema) document.documentElement.setAttribute("data-theme", th); } catch(e){}
+if (window.BMTema){ document.documentElement.setAttribute("data-theme", BMTema.gelap() ? "dark" : "light");
+  document.addEventListener("bm-tema", e => { const t = e.detail.gelap ? "dark" : "light"; if (document.documentElement.getAttribute("data-theme") !== t){ document.documentElement.setAttribute("data-theme", t); try { if (typeof page !== "undefined" && page === "ringkasan") render(); } catch(_){} } }); }
 boot();
 </script>
 
