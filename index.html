@@ -619,6 +619,7 @@ const COA = [
  ["2-140","Utang Gaji","Kewajiban","K"],
  ["2-141","Utang PPh 21 Karyawan","Kewajiban","K"],
  ["2-142","Utang BPJS","Kewajiban","K"],
+ ["2-143","Utang Penggantian Biaya (Reimbursement)","Kewajiban","K"],
  ["3-100","Modal Pemilik","Ekuitas","K"],
  ["3-110","Prive (Pengambilan Pemilik)","Ekuitas","D"],
  ["4-100","Penjualan Bruto","Pendapatan","K"],
@@ -642,10 +643,14 @@ const COA = [
  ["7-110","Beban Sewa","Beban Operasional","D"],
  ["7-120","Beban Listrik, Air & Internet","Beban Operasional","D"],
  ["7-130","Beban Packing & Perlengkapan","Beban Operasional","D"],
+ ["7-135","Beban Konsumsi & Rapat","Beban Operasional","D"],
+ ["7-136","Beban Jamuan & Entertainment","Beban Operasional","D"],
  ["7-140","Beban Transportasi & Pengiriman","Beban Operasional","D"],
+ ["7-145","Beban Perjalanan Dinas & Akomodasi","Beban Operasional","D"],
  ["7-150","Beban Administrasi Bank","Beban Operasional","D"],
  ["7-160","Beban Penyusutan","Beban Operasional","D"],
  ["7-170","Beban Pemasaran Lain (di luar MP)","Beban Operasional","D"],
+ ["7-175","Beban Kesejahteraan & Kesehatan Karyawan","Beban Operasional","D"],
  ["7-180","Beban Lain-lain","Beban Operasional","D"],
  ["7-190","Kerugian Barang Retur & Hilang","Beban Operasional","D"],
  ["8-100","Pendapatan Lain-lain","Pendapatan Lain","K"],
@@ -1625,7 +1630,7 @@ function hitungBuku(m, a){
   const hpp = net("5-100") + net("5-110") + net("5-120");
   const labaKotor = penjualanNeto - hpp;
   const MP = ["6-100","6-110","6-120","6-130","6-140","6-145","6-150","6-160","6-170"];
-  const OPX = ["7-100","7-105","7-110","7-120","7-130","7-140","7-150","7-160","7-170","7-180","7-190"];
+  const OPX = ["7-100","7-105","7-110","7-120","7-130","7-135","7-136","7-140","7-145","7-150","7-160","7-170","7-175","7-180","7-190"];
   const bebanMp = sum(MP), bebanOps = sum(OPX);
   const labaUsaha = labaKotor - bebanMp - bebanOps;
   const lain = -net("8-100") - net("8-105") - net("8-110") - net("8-200");
@@ -1635,7 +1640,7 @@ function hitungBuku(m, a){
 
   const ASET_L = ["1-100","1-110","1-120","1-121","1-122","1-125","1-130","1-131","1-135","1-140","1-150","1-160","1-170"];
   const ASET_T = ["1-200","1-201","1-202","1-210","1-211","1-212"];
-  const KWJ = ["2-100","2-110","2-115","2-120","2-130","2-140","2-141","2-142"];
+  const KWJ = ["2-100","2-110","2-115","2-120","2-130","2-140","2-141","2-142","2-143"];
   const totAset = sum(ASET_L) + sum(ASET_T);
   const totKwj = -sum(KWJ);
   const totEkuitas = -net("3-100") - net("3-110") + labaBersih;
@@ -2445,14 +2450,14 @@ function terapkanJurnalPayroll(d){
     return { plat: o0[0] || "shopee", toko: o0[1] || "", kel: g ? g.id : undefined };
   };
   const lama = S.jurnal.filter(DARI_PAY), baru = [];
-  for (const j of [...(d.gaji || []), ...(d.kasbon || [])]){
+  for (const j of [...(d.gaji || []), ...(d.kasbon || []), ...(d.reimburse || [])]){
     const o = tujuan(j.kelompok);
     const baris = (j.baris || []).map(l => ({ kode: String(l.kode), d: Math.round(num(l.d)), k: Math.round(num(l.k)) }));
     if (!baris.length) continue;
     baru.push({ tgl: String(j.tgl || "").slice(0, 10), ket: j.ket || "Gaji", plat: o.plat, toko: o.toko, kelompok: o.kel,
       sumber: "payroll", payId: j.id, baris });
   }
-  PAY_INFO = { gaji: (d.gaji || []).length, kasbon: (d.kasbon || []).length };
+  PAY_INFO = { gaji: (d.gaji || []).length, kasbon: (d.kasbon || []).length, reimburse: (d.reimburse || []).length };
   if (JSON.stringify(lama) === JSON.stringify(baru)) return false;
   S.jurnal = S.jurnal.filter(x => !DARI_PAY(x)).concat(baru);
   return true;
