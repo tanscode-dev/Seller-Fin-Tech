@@ -3227,18 +3227,59 @@ document.addEventListener("mousemove", e => {
 
 /* ---------- tabel data ---------- */
 let showAll = {};
+/* Saringan per tabel (tidak disimpan): toko, tanggal (semua / bulan / rentang), baris per halaman. */
+const TBL_F = {};
+const TBL_PER = [10, 30, 50, 100, 300];
+const tf = key => TBL_F[key] || (TBL_F[key] = { toko: "", mode: "semua", bulan: "", dari: "", sampai: "", per: 50, hal: 1 });
 function viewTable(key){
   const T = TABLES[key], rows = S[key];
-  const LIM = 200;
-  const all = showAll[key] || rows.length <= LIM;
-  const shown = all ? rows.map((r,i)=>[r,i]) : rows.map((r,i)=>[r,i]).slice(-LIM);
+  const F = tf(key);
+  const dk = (T.cols.find(c => c.t === "date") || {}).k;
+  const adaToko = rows.some(r => r && (r.plat || r.toko));
+  const tokoOpsi = adaToko ? [...new Map(rows.map(r => [outletDari(r), { key: outletDari(r), plat: platDari(r), toko: r.toko || "" }])).values()]
+    .sort((a, b) => labelOutlet(a).localeCompare(labelOutlet(b))) : [];
+  const bulanOpsi = dk ? [...new Set(rows.map(r => String(r[dk] || "").slice(0, 7)).filter(b => /^\d{4}-\d{2}$/.test(b)))].sort().reverse() : [];
+  const lolos = r => {
+    if (F.toko && outletDari(r) !== F.toko) return false;
+    if (dk && F.mode === "bulan" && F.bulan && String(r[dk] || "").slice(0, 7) !== F.bulan) return false;
+    if (dk && F.mode === "rentang"){ const t = String(r[dk] || ""); if (F.dari && t < F.dari) return false; if (F.sampai && t > F.sampai) return false; }
+    return true;
+  };
+  const tersaring = rows.map((r,i) => [r,i]).filter(([r]) => lolos(r));
+  if (dk) tersaring.sort((a, b) => String(b[0][dk] || "").localeCompare(String(a[0][dk] || "")) || b[1] - a[1]);
+  else tersaring.reverse();
+  const per = TBL_PER.includes(F.per) ? F.per : 50;
+  const jmlHal = Math.max(1, Math.ceil(tersaring.length / per));
+  if (F.hal > jmlHal) F.hal = jmlHal;
+  if (F.hal < 1) F.hal = 1;
+  const shown = tersaring.slice((F.hal - 1) * per, F.hal * per);
+  const all = true, LIM = 0;
+  const disaring = !!(F.toko || (F.mode === "bulan" && F.bulan) || (F.mode === "rentang" && (F.dari || F.sampai)));
+  const saringan = (tokoOpsi.length > 1 || dk) ? `<div class="toolbar" style="margin-top:-4px">
+    ${tokoOpsi.length > 1 ? `<select data-tf="${key}:toko" title="Saring toko"><option value="">Semua toko (${tokoOpsi.length})</option>${tokoOpsi.map(o => `<option value="${esc(o.key)}"${F.toko === o.key ? " selected" : ""}>${esc(labelOutlet(o))}</option>`).join("")}</select>` : ""}
+    ${dk ? `<select data-tf="${key}:mode" title="Saring tanggal"><option value="semua"${F.mode==="semua"?" selected":""}>Semua tanggal</option><option value="bulan"${F.mode==="bulan"?" selected":""}>Per bulan</option><option value="rentang"${F.mode==="rentang"?" selected":""}>Rentang tanggal</option></select>
+      ${F.mode === "bulan" ? `<select data-tf="${key}:bulan"><option value="">Pilih bulan</option>${bulanOpsi.map(b => `<option value="${b}"${F.bulan === b ? " selected" : ""}>${esc(labelBulan(b))}</option>`).join("")}</select>` : ""}
+      ${F.mode === "rentang" ? `<span class="status">dari</span><input type="date" data-tf="${key}:dari" value="${esc(F.dari)}" style="width:150px"><span class="status">s/d</span><input type="date" data-tf="${key}:sampai" value="${esc(F.sampai)}" style="width:150px">` : ""}` : ""}
+    ${disaring ? `<button class="btn ghost" data-tfreset="${key}">Hapus saringan</button>` : ""}
+  </div>` : "";
+  const halaman = rows.length ? `<div class="toolbar" style="margin-top:10px">
+    <span class="status">Tampilkan</span>
+    <select data-tf="${key}:per">${TBL_PER.map(n => `<option value="${n}"${per === n ? " selected" : ""}>${n}</option>`).join("")}</select>
+    <span class="status">baris per halaman · ${tersaring.length ? `${(F.hal - 1) * per + 1}–${Math.min(F.hal * per, tersaring.length)} dari ${tersaring.length}` : "0"}${disaring ? ` (tersaring dari ${rows.length})` : ""} · terbaru di atas</span>
+    <span class="spacer"></span>
+    <button class="btn ghost" data-tfhal="${key}:1"${F.hal <= 1 ? " disabled" : ""}>« Awal</button>
+    <button class="btn ghost" data-tfhal="${key}:${F.hal - 1}"${F.hal <= 1 ? " disabled" : ""}>‹ Sebelumnya</button>
+    <span class="status">Halaman ${F.hal} / ${jmlHal}</span>
+    <button class="btn ghost" data-tfhal="${key}:${F.hal + 1}"${F.hal >= jmlHal ? " disabled" : ""}>Berikutnya ›</button>
+    <button class="btn ghost" data-tfhal="${key}:${jmlHal}"${F.hal >= jmlHal ? " disabled" : ""}>Akhir »</button>
+  </div>` : "";
   const head = T.cols.map(c => `<th class="${c.t==="n"||c.t==="calc"?"r":""}"${c.w?` style="width:${c.w}px"`:""}>${esc(c.h)}</th>`).join("");
   const body = shown.length ? shown.map(([r,i]) => `<tr>` + T.cols.map(c => cell(key, i, r, c)).join("") +
     `<td style="width:34px"><button class="rowdel" data-del="${key}:${i}" title="Hapus baris">×</button></td></tr>`).join("")
     : "";
   const totals = T.cols.map(c => {
     if (c.t !== "n" && c.t !== "calc") return `<td></td>`;
-    const t = rows.reduce((s,r) => s + (c.f ? c.f(r) : num(r[c.k])), 0);
+    const t = tersaring.reduce((s,[r]) => s + (c.f ? c.f(r) : num(r[c.k])), 0);
     return `<td class="calc"><strong>${rpS(t)}</strong></td>`;
   }).join("");
   return `
@@ -3264,11 +3305,12 @@ function viewTable(key){
     ${rows.length ? `<button class="btn" data-xls="${key}">Unduh CSV</button>` : ""}
     ${rows.length && boleh("hapus") ? `<button class="btn danger" data-clear="${key}">Kosongkan tabel</button>` : ""}
     <span class="spacer"></span>
-    <span class="status">${rows.length} ${esc(T.singular)}${!all ? ` · menampilkan ${LIM} terakhir` : ""}</span>
-    ${!all ? `<button class="btn ghost" data-showall="${key}">Tampilkan semua</button>` : ""}
+    <span class="status">${rows.length} ${esc(T.singular)}</span>
   </div>
+  ${saringan}
   ${body ? `<div class="tablewrap"><table><thead><tr>${head}<th></th></tr></thead><tbody>${body}</tbody>
-    <tfoot><tr>${totals}<td></td></tr></tfoot></table></div>`
+    <tfoot><tr>${totals}<td></td></tr></tfoot></table></div>${halaman}`
+   : rows.length ? `<div class="tablewrap"><div class="empty">Tidak ada baris yang cocok dengan saringan.</div></div>${halaman}`
    : `<div class="tablewrap"><div class="empty">Belum ada data. Tambahkan baris baru, atau unggah file export dari Shopee, TikTok Shop, atau Lazada — platform dan kolomnya dikenali otomatis.</div></div>`}
   ${T.cols.some(c => c.t === "sku") ? `<datalist id="dl-sku-tabel">${
       S.produk.slice(0, 4000).map(p => `<option value="${esc(p.sku)}">${
@@ -8479,6 +8521,10 @@ document.addEventListener("click", async e => {
     return;
   }
   if (t.id === "sku-semua"){ (S.ui ||= {}).skuSemua = true; render(); return; }
+  const th = t.closest("[data-tfhal]");
+  if (th && !th.disabled){ const [k, h] = th.dataset.tfhal.split(":"); tf(k).hal = Math.max(1, +h || 1); render(); window.scrollTo(0, 0); return; }
+  const tr0 = t.closest("[data-tfreset]");
+  if (tr0){ const F = tf(tr0.dataset.tfreset); Object.assign(F, { toko: "", mode: "semua", bulan: "", dari: "", sampai: "", hal: 1 }); render(); return; }
   const sa = t.closest("[data-showall]");
   if (sa){ showAll[sa.dataset.showall] = true; render(); return; }
   const imp = t.closest("[data-import]");
@@ -8579,6 +8625,11 @@ document.addEventListener("input", e => {
     if (el){ el.focus(); el.setSelectionRange(v.length, v.length); } }, 250);
 });
 document.addEventListener("change", e => {
+  const tfx = e.target.closest && e.target.closest("[data-tf]");
+  if (tfx){ const [k, f] = tfx.dataset.tf.split(":"); const F = tf(k);
+    F[f] = f === "per" ? +tfx.value : tfx.value; F.hal = 1;
+    if (f === "mode" && tfx.value === "bulan" && !F.bulan){ const b = (S[k] || []).map(r => String(r[(TABLES[k].cols.find(c => c.t === "date") || {}).k] || "").slice(0, 7)).filter(Boolean).sort().pop(); if (b) F.bulan = b; }
+    render(); return; }
   if (e.target && e.target.id === "pilih-usaha"){ gantiUsaha(e.target.value); return; }
   const t = e.target;
   if (t.dataset.jc){
