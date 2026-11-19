@@ -5118,6 +5118,8 @@ async function unduhInvoice(gi){
    (supaya mesin akuntansi dan kartu stok tidak perlu diubah), tapi di layar
    dikelompokkan kembali menjadi faktur lengkap dengan kepala dan rinciannya. */
 let mentahBeli = false;
+let BELI_CARI = "";
+const BELI_BUKA = new Set();
 const SEP_INV = " ›› ";
 const kunciFaktur = x => [platDari(x), x.toko || "", x.tgl || "", String(x.faktur || "").trim(), String(x.supplier || "").trim()].join(SEP_INV);
 
@@ -5161,7 +5163,12 @@ function viewBeli(){
   const dl = `<datalist id="dl-sku">${S.produk.slice(0, 4000).map(p =>
       `<option value="${esc(p.sku)}">${esc([p.kode, p.nama].filter(Boolean).join(" · ").slice(0,70))}</option>`).join("")}</datalist>`;
 
+  const q = BELI_CARI.trim().toLowerCase();
+  const namaSku = x => String((P[String(x.sku)] || {}).nama || x.nama || "");
+  const cocokQ = g => !q || g.faktur.toLowerCase().includes(q) || g.supplier.toLowerCase().includes(q)
+    || g.baris.some(({ x }) => String(x.sku || "").toLowerCase().includes(q) || namaSku(x).toLowerCase().includes(q));
   const kartu = G.map((g, gi) => {
+    if (!cocokQ(g)) return "";
     const baris = g.baris.map(({ i, x }) => {
       const p = P[String(x.sku)] || {};
       const sub = num(x.qty) * num(x.harga);
@@ -5214,10 +5221,20 @@ function viewBeli(){
         <button class="btn danger" data-bdelinv="${gi}">Hapus faktur</button>
       </div>
     </div></div>`;
-    if (inv) html = html.replace(/<(input|select)\b/g, "<$1 disabled")
-      .replace(/<button class="btn" data-badd="\d+">[^<]*<\/button>/, "")
-      .replace(/<button class="btn danger" data-bdelinv="\d+">[^<]*<\/button>/, "")
-      .replace(/<button class="rowdel"[^>]*>&times;<\/button>/g, "");
+    if (inv){
+      html = html.replace(/<(input|select)\b/g, "<$1 disabled")
+        .replace(/<button class="btn" data-badd="\d+">[^<]*<\/button>/, "")
+        .replace(/<button class="btn danger" data-bdelinv="\d+">[^<]*<\/button>/, "")
+        .replace(/<button class="rowdel"[^>]*>&times;<\/button>/g, "")
+        .replace('<div class="card" style="margin-bottom:14px"><div class="bd">', '<div style="padding:4px 14px 14px">')
+        .replace(/<\/div><\/div>\s*$/, "</div>");
+      const buka = BELI_BUKA.has(g.k);
+      return `<details class="card" data-bk="${esc(g.k)}"${buka ? " open" : ""} style="margin-bottom:6px">
+        <summary style="display:grid;grid-template-columns:96px 150px minmax(120px,1fr) 70px 90px 120px 18px;gap:10px;align-items:center;padding:10px 14px;cursor:pointer;list-style:none">
+          <span>${fmtD(g.tgl)}</span><strong>${esc(g.faktur || "—")}</strong><span>${esc(g.supplier || "—")}</span>
+          <span class="status">${g.baris.length} SKU</span><span class="calc">${rp(g.qty)} pcs</span><strong class="calc">${rp(g.total)}</strong>
+          <span class="bl-panah" style="color:var(--ink3)">${buka ? "▴" : "▾"}</span></summary>${html}</details>`;
+    }
     return html;
   }).join("");
   const nInv = new Set(S.beli.filter(DARI_INV).map(x => x.invId)).size;
@@ -5228,6 +5245,26 @@ function viewBeli(){
       — kelompok dipilih per invoice di Invoice Manager; stok dipakai bersama semua toko di kelompoknya.
       <button class="btn ghost" id="beli-seginv">Segarkan</button></div>` : "";
 
+  let riwayat = "";
+  if (q){
+    const R = S.beli.filter(x => inToko(x) && (String(x.sku || "").toLowerCase().includes(q) || namaSku(x).toLowerCase().includes(q)))
+      .sort((a, b) => a.tgl < b.tgl ? 1 : a.tgl > b.tgl ? -1 : 0);
+    if (R.length){
+      const tq = R.reduce((t, x) => t + num(x.qty), 0), tv = R.reduce((t, x) => t + num(x.qty) * num(x.harga) + num(x.biayaLain), 0);
+      const nSku = new Set(R.map(x => x.sku)).size;
+      riwayat = `<div class="card" style="margin:0 0 14px"><div class="bd">
+        <strong>Riwayat beli “${esc(BELI_CARI.trim())}”</strong>
+        <span class="status"> · ${R.length} kali dibeli · ${nSku} SKU · ${rp(tq)} pcs · ${rp(tv)} · rata-rata ${rp(tq ? tv / tq : 0)}/unit · terakhir ${fmtD(R[0].tgl)}</span>
+        <div class="tablewrap" style="margin-top:8px;max-height:380px;overflow:auto"><table><thead><tr><th>Tanggal</th><th>No. Faktur</th><th>Supplier</th><th>SKU</th><th>Nama</th>
+          <th class="r">Qty</th><th class="r">Harga satuan</th><th class="r">Perolehan / unit</th><th>Sumber</th><th></th></tr></thead><tbody>
+        ${R.map(x => { const per = num(x.qty) ? (num(x.qty) * num(x.harga) + num(x.biayaLain)) / num(x.qty) : 0;
+          return `<tr><td>${fmtD(x.tgl)}</td><td>${esc(x.faktur || "—")}</td><td>${esc(x.supplier || "—")}</td><td>${esc(x.sku || "")}</td>
+          <td style="font-size:12px;color:var(--ink3)">${esc(namaSku(x) || "—")}</td><td class="calc">${rp(num(x.qty))}</td><td class="calc">${rp(num(x.harga))}</td>
+          <td class="calc"><strong>${rp(per)}</strong></td><td class="status">${DARI_INV(x) ? "Invoice 🔒" : "Manual"}</td>
+          <td><button class="btn ghost" data-bbuka="${esc(kunciFaktur(x))}">Lihat faktur</button></td></tr>`; }).join("")}
+        </tbody></table></div></div></div>`;
+    } else riwayat = `<div class="status" style="margin:0 0 12px">Tidak ada pembelian yang cocok dengan “${esc(BELI_CARI.trim())}”.</div>`;
+  }
   return `
   <div class="pagehead"><h1>Pembelian Persediaan</h1>
     ${pandu(`Satu faktur bisa memuat banyak SKU. Ongkos masuk diisi sekali di tingkat faktur lalu dibagi
@@ -5238,11 +5275,13 @@ function viewBeli(){
     <button class="btn primary" id="beli-baru">+ Faktur baru</button>
     <button class="btn" data-import="beli">Impor file</button>
     ${S.beli.length ? `<button class="btn" data-xls="beli">Unduh CSV</button>` : ""}
+    <input type="search" id="beli-cari" value="${esc(BELI_CARI)}" placeholder="Cari SKU, nama, no. faktur, supplier…" style="min-width:260px">
     <span class="spacer"></span>
     <span class="status">${G.length} faktur · ${S.beli.filter(inToko).length} baris</span>
     <button class="btn ghost" id="beli-mentah">Data mentah</button>
   </div>
   ${panelInv}
+  ${riwayat}
   ${panelUsulan()}
   ${G.length ? kartu : `<div class="tablewrap"><div class="empty">Belum ada pembelian.
     Tekan <strong>+ Faktur baru</strong> lalu isi SKU yang Anda beli beserta qty dan harganya.</div></div>`}
@@ -8234,6 +8273,13 @@ document.addEventListener("click", async e => {
   if (t.id === "tb-outlet" || t.id === "sku-outlet"){ bukaPilihToko(); return; }
   if (t.id === "sku-mentah"){ mentah = !mentah; render(); return; }
   if (t.id === "beli-mentah"){ mentahBeli = !mentahBeli; render(); return; }
+  if (t.hasAttribute && t.hasAttribute("data-bbuka")){
+    const k = t.dataset.bbuka;
+    const el = [...document.querySelectorAll("[data-bk]")].find(d => d.dataset.bk === k);
+    if (el){ BELI_BUKA.add(k); el.open = true; el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    else { BELI_CARI = ""; render(); const e2 = [...document.querySelectorAll("[data-bk]")].find(d => d.dataset.bk === k); if (e2){ BELI_BUKA.add(k); e2.open = true; e2.scrollIntoView({ block: "start" }); } }
+    return;
+  }
   if (t.id === "rk-reset"){ RK = null; render(); return; }
   if (t.id === "rk-masukkan"){
     const n = rkMasukkan();
@@ -8495,8 +8541,22 @@ document.addEventListener("focusout", e => {
 });
 addEventListener("scroll", () => { jbox.classList.remove("on"); }, true);
 
+document.addEventListener("toggle", e => {
+  const d = e.target;
+  if (!d || !d.dataset || d.dataset.bk === undefined) return;
+  if (d.open) BELI_BUKA.add(d.dataset.bk); else BELI_BUKA.delete(d.dataset.bk);
+  const p = d.querySelector(".bl-panah"); if (p) p.textContent = d.open ? "▴" : "▾";
+}, true);
 document.addEventListener("input", e => {
   const id = e.target.id;
+  if (id === "beli-cari"){
+    BELI_CARI = e.target.value;
+    clearTimeout(window.__cariTimer);
+    window.__cariTimer = setTimeout(() => { const v = e.target.value; render();
+      const el = document.getElementById(id);
+      if (el){ el.focus(); el.setSelectionRange(v.length, v.length); } }, 250);
+    return;
+  }
   if (id !== "sku-cari" && id !== "resep-cari" && id !== "kt-cari") return;
   const simpanKe = id === "sku-cari" ? "skuCari" : id === "kt-cari" ? "ktCari" : "resepCari";
   (S.ui ||= {})[simpanKe] = e.target.value;
