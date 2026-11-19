@@ -2482,6 +2482,10 @@ const DARI_RAKSA = x => x && x.sumber === "raksa";
 const STATUS_RAKSA = { SELESAI: "Selesai", DIKIRIM: "Dikirim", BELUM_DIKIRIM: "Belum dikirim", DIBATALKAN: "Dibatalkan",
   BELUM_DIBAYAR: "Belum bayar", PENGEMBALIAN: "Pengembalian" };
 let RAKSA_INFO = null;
+/* Angka laporan (laba, HPP, persediaan, neraca, dst.) ditahan sampai pesanan Raksa selesai dimuat,
+   karena HPP dihitung dari pesanan — tanpa itu laba sempat tampil terlalu besar. */
+let RAKSA_SIAP = true;
+const HAL_TUNGGU_RAKSA = new Set(["ringkasan","labarugi","neraca","aruskas","neracasaldo","bukubesar","fiskal","rekon","cutoff","akun","order"]);
 function tokoDariRaksa(nama){
   const kepala = String(nama || "").split(" - ")[0].trim();
   if (/^DG$/i.test(kepala)) return "Dunia Gelang";
@@ -2503,13 +2507,16 @@ function terapkanPesananRaksa(rows){
   RAKSA_INFO = { baris: baru.length, pesanan: new Set(baru.map(x => x.no)).size, lewat, waktu: new Date() };
 }
 async function muatPesananRaksa(){
-  if (!GABUNGAN || !SB || !AKUN || !AKUN.usahaId) return;
+  if (!GABUNGAN || !SB || !AKUN || !AKUN.usahaId) { RAKSA_SIAP = true; return; }
+  RAKSA_SIAP = false;
+  const batas = setTimeout(() => { if (!RAKSA_SIAP){ RAKSA_SIAP = true; note("Pesanan Raksa lama dimuat — angka sementara tanpa pesanan Raksa"); render(); } }, 25000);
   try {
     const { data, error } = await SB.rpc("seller_pesanan_raksa", { p_company: AKUN.usahaId });
-    if (error || !Array.isArray(data)) return;
+    if (error || !Array.isArray(data)) { if (error) note("Pesanan Raksa gagal dimuat — HPP belum termasuk pesanan Raksa"); return; }
     terapkanPesananRaksa(data);
-    segarkanPeta(); HASIL.clear(); REKAP.clear(); render();
-  } catch(e){}
+    segarkanPeta(); HASIL.clear(); REKAP.clear();
+  } catch(e){ note("Pesanan Raksa gagal dimuat — HPP belum termasuk pesanan Raksa"); }
+  finally { clearTimeout(batas); RAKSA_SIAP = true; render(); }
 }
 /* Pesanan dari Raksa tidak ikut disimpan (diambil ulang tiap kali dibuka). */
 const untukSimpan = () => S.order.some(DARI_RAKSA) ? Object.assign({}, S, { order: S.order.filter(x => !DARI_RAKSA(x)) }) : S;
@@ -3040,6 +3047,12 @@ function render(){
   renderNav();
   const v = document.getElementById("view");
   if (render._hal !== page){ render._hal = page; v.classList.remove("bm-masuk"); void v.offsetWidth; v.classList.add("bm-masuk"); }
+  if (!RAKSA_SIAP && HAL_TUNGGU_RAKSA.has(page)){
+    v.innerHTML = `<div class="pagehead"><h1>${esc(((NAV.find(n => n[1] === page) || [])[2]) || "Laporan")}</h1></div>
+      <div class="card"><div class="bd" style="display:flex;align-items:center;gap:10px"><span class="bm-sk" style="width:18px;height:18px;border-radius:50%;display:inline-block"></span>
+      <div><strong>Memuat pesanan Raksa…</strong><div class="status">Laba, HPP & persediaan ditampilkan setelah pesanan selesai dimuat supaya angkanya final.</div></div></div></div>`;
+    return;
+  }
   v.innerHTML = (page === "order" && !mentah) ? viewSku()
     : (page === "jurnal" && !mentah) ? viewJurnal()
     : (page === "aset") ? viewAset()
