@@ -912,11 +912,8 @@ const tokoAktif = () => { const P = pilihList(); if (!P.length) return "";
    Beberapa toko digabung jadi satu kelompok = satu badan usaha. Memilih kelompok
    menyaring semua laporan ke toko-toko di dalamnya. Pembelian milik kelompok, bukan
    milik satu toko: barang yang dibeli CV A dipakai bersama oleh semua toko CV A. */
-const KELOMPOK_AWAL = () => [
-  { id: "k1", nama: "Kelompok 1 – Dunia Gelang & Sherozky",
-    outlets: ["shopee|Dunia Gelang", "shopee|Sherozky", "lazada|Dunia Gelang", "lazada|Sherozky", "tiktok|Dunia Gelang"] },
-  { id: "k2", nama: "Kelompok 2 – Stipa & Tanvery",
-    outlets: ["shopee|Stipa", "lazada|Stipa", "tiktok|Stipa", "shopee|Tanvery"] }];
+/* Usaha baru mulai dengan satu kelompok kosong (tanpa nama toko milik usaha lain). */
+const KELOMPOK_AWAL = () => [{ id: "k1", nama: "Kelompok 1", outlets: [] }];
 function daftarKelompok(){ if (!Array.isArray(S.setup.kelompok)) S.setup.kelompok = KELOMPOK_AWAL(); return S.setup.kelompok; }
 let KEL_CACHE = { src: null, byId: new Map(), byOutlet: new Map() };
 function petaKelompok(){
