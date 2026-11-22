@@ -465,6 +465,12 @@ tbody tr.sub:hover td{background:var(--surface3)}
 /* ---------- misc ---------- */
 .hint{background:var(--surface2); border-left:3px solid var(--accent); padding:11px 14px; border-radius:0 8px 8px 0; font-size:12.5px; color:var(--ink2); margin-bottom:16px}
 .hint code{font-family:"IBM Plex Mono",monospace; font-size:11.5px; background:var(--surface3); padding:1px 5px; border-radius:4px}
+.rs-akun{display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:12px 14px; margin-bottom:12px;
+  background:var(--surface2); border:1px solid var(--line); border-radius:12px}
+.rs-ikon{width:36px; height:36px; border-radius:10px; display:grid; place-items:center; flex:none;
+  background:#ee4d2d; color:#fff; font-weight:700; font-size:17px}
+.rs-langkah{margin:4px 0 0; padding-left:20px; font-size:13px; color:var(--ink2); line-height:1.6}
+.rs-langkah li{margin:2px 0}
 .warnbox{background:var(--warn-soft); border-left:3px solid var(--warn); padding:11px 14px; border-radius:0 8px 8px 0; font-size:12.5px; margin-bottom:16px}
 dialog{border:1px solid var(--line2); border-radius:12px; background:var(--surface); color:var(--ink); padding:0; max-width:720px; width:92vw; box-shadow:var(--shadow)}
 dialog::backdrop{background:rgba(0,0,0,.45)}
@@ -9137,9 +9143,10 @@ const kunciGanti = (key, r) => platDari(r) + "|" + String(r.toko || "") + "|" + 
    tiap toko Shopee lewat satu sub akun, lalu menitipkan filenya di sini. File TIDAK masuk
    sendiri: tombol Impor membuka layar impor yang biasa dengan toko sudah terisi, jadi
    isinya tetap bisa diperiksa sebelum masuk buku. */
-const RS_USAHA = "fdd98c7e-d5a6-4ffa-b482-6d0d32f1bf49";   // usaha yang sub akun Shopee-nya terpasang
-const RS = { run:null, file:[], peta:[], dimuat:0, t:null, sibuk:false };
-const rsTampil = () => !!(AKUN && AKUN.usahaId === RS_USAHA && SB);
+/* Plug and play: tiap usaha menghubungkan sub akun Shopee-nya sendiri (hanya pemilik usaha).
+   Password disimpan terenkripsi di brankas BM dan tidak pernah dikirim balik ke layar. */
+const RS = { run:null, file:[], peta:[], akun:null, dimuat:0, t:null, sibuk:false, form:false, usaha:null };
+const rsTampil = () => !!(AKUN && AKUN.usahaId && SB);
 const rsWaktu = iso => {
   if (!iso) return "—";
   const p = Object.fromEntries(new Intl.DateTimeFormat("id-ID", { timeZone:"Asia/Jakarta", day:"2-digit", month:"2-digit",
@@ -9156,19 +9163,24 @@ const rsMundur = (tgl, n) => new Date(new Date(tgl + "T00:00:00Z").getTime() - n
 
 async function rsMuat(paksa){
   if (!rsTampil() || !document.getElementById("rs-kartu")) return;
+  if (RS.usaha !== AKUN.usahaId){ RS.usaha = AKUN.usahaId; RS.dimuat = 0; RS.form = false; RS.akun = null; }
   if (!paksa && Date.now() - RS.dimuat < 20000){ rsGambar(); return; }
   try {
-    const [r, f, p] = await Promise.all([
+    const [a, r, f, p] = await Promise.all([
+      SB.rpc("shopee_akun_info", { p_company: AKUN.usahaId }),
       SB.from("shopee_robot_run").select("id,status,jenis,mode,dari_tgl,sampai_tgl,oleh,dibuat,mulai,selesai,hasil,langkah,otp_minta,otp_pesan,log_url")
         .eq("company_id", AKUN.usahaId).order("dibuat", { ascending:false }).limit(1),
       SB.from("shopee_robot_file").select("id,nama_shopee,jenis,dari_tgl,sampai_tgl,path,nama_file,status,dibuat")
         .eq("company_id", AKUN.usahaId).eq("status", "baru").order("dibuat", { ascending:false }).limit(200),
       SB.from("shopee_toko_peta").select("nama_shopee,toko_seller,aktif").eq("company_id", AKUN.usahaId).order("nama_shopee"),
     ]);
-    if (r.error){ const el = document.getElementById("rs-kartu"); if (el) el.remove(); return; }
+    if (a.error || r.error){ const el = document.getElementById("rs-kartu"); if (el) el.remove(); return; }
+    RS.akun = a.data || {};
     RS.run = (r.data || [])[0] || null; RS.file = f.data || []; RS.peta = p.data || []; RS.dimuat = Date.now();
   } catch(e){ return; }
-  rsGambar();
+  // jangan menggambar ulang saat orang sedang mengetik di kartu (OTP / form akun)
+  const el = document.getElementById("rs-kartu"), fokus = document.activeElement;
+  if (!(el && fokus && el.contains(fokus) && /^(INPUT|SELECT|TEXTAREA)$/.test(fokus.tagName))) rsGambar();
   clearTimeout(RS.t);
   if (RS.run && ["ANTRE","BERJALAN","MENUNGGU_OTP"].includes(RS.run.status)) RS.t = setTimeout(() => rsMuat(true), 5000);
 }
@@ -9185,11 +9197,21 @@ function rsGambar(){
   const fileLain = RS.file.filter(f => f.jenis !== key).length;
   const toko = daftarToko();
   const dariDef = rsMundur(rsHariIni(), 14), sampaiDef = rsMundur(rsHariIni(), 1);
+  const A = RS.akun || {};
+  if (!A.terhubung || RS.form){ rsGambarAkun(el, A); return; }
   el.innerHTML = `
     <div class="hd"><h2>Robot Shopee</h2>
       ${st ? `<span class="chip ${st[1]}"><span class="dot"></span>${esc(st[0])}</span>` : `<span class="note">Belum pernah dijalankan</span>`}
       <span class="note">Otomatis tiap Senin (14 hari terakhir) &amp; tanggal 3 (bulan lalu penuh)</span></div>
     <div class="bd">
+      <div class="rs-akun">
+        <span class="rs-ikon" aria-hidden="true">S</span>
+        <span style="flex:1;min-width:200px"><span class="status">Sub akun Shopee</span><br><strong>${esc(A.username || "")}</strong>
+          ${A.aktif ? `<span class="chip ok" style="margin-left:6px"><span class="dot"></span>Terhubung</span>` : `<span class="chip bad" style="margin-left:6px"><span class="dot"></span>Dijeda</span>`}</span>
+        ${A.boleh_atur ? `<button type="button" class="btn ghost" id="rs-akun-ubah">Ganti akun / password</button>
+          <button type="button" class="btn ghost" id="rs-akun-jeda">${A.aktif ? "Jeda robot" : "Aktifkan lagi"}</button>` : ""}
+      </div>
+      ${!A.aktif ? `<div class="warnbox">Robot Shopee sedang dijeda: jadwal otomatis dilewati dan tombol Ambil sekarang tidak bisa dipakai.</div>` : ""}
       ${R ? `<div class="status" style="margin-bottom:10px">Terakhir: ${esc(R.mode === "eksplor" ? "uji login" : (R.jenis === "MANUAL" ? "manual" : R.jenis.toLowerCase()))}
         · periode ${esc(fmtD(R.dari_tgl))}–${esc(fmtD(R.sampai_tgl))} · ${esc(rsWaktu(R.mulai || R.dibuat))}${R.oleh ? " · " + esc(R.oleh) : ""}
         ${jalan && R.langkah ? `<br>Langkah: ${esc(R.langkah)}` : ""}
@@ -9217,8 +9239,8 @@ function rsGambar(){
       ${fileLain ? `<div class="status" style="margin-bottom:10px">${fileLain} file ${key === "mutasi" ? "penghasilan" : "mutasi saldo"} menunggu di halaman ${key === "mutasi" ? "Penghasilan Marketplace" : "Mutasi Saldo"}.</div>` : ""}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <label class="status">Periode <input type="date" id="rs-dari" value="${dariDef}"> – <input type="date" id="rs-sampai" value="${sampaiDef}"></label>
-        <button type="button" class="btn primary" id="rs-jalan"${jalan ? " disabled" : ""}>Ambil sekarang</button>
-        <button type="button" class="btn ghost" id="rs-uji"${jalan ? " disabled" : ""} title="Hanya login & membaca daftar toko, tanpa mengambil data">Uji login</button>
+        <button type="button" class="btn primary" id="rs-jalan"${jalan || !A.aktif ? " disabled" : ""}>Ambil sekarang</button>
+        <button type="button" class="btn ghost" id="rs-uji"${jalan || !A.aktif ? " disabled" : ""} title="Login, baca daftar toko, buka toko pertama sampai Penghasilan Saya — tanpa mengambil data">Uji login</button>
         ${R && R.log_url ? `<a class="btn ghost" href="${esc(R.log_url)}" target="_blank" rel="noopener">Log robot</a>` : ""}
       </div>
     </div>`;
@@ -9232,6 +9254,16 @@ function rsGambar(){
   };
   $("#rs-jalan").onclick = () => jalankan("biasa");
   $("#rs-uji").onclick = () => jalankan("eksplor");
+  const ubah = $("#rs-akun-ubah");
+  if (ubah) ubah.onclick = () => { RS.form = true; rsGambar(); };
+  const jeda = $("#rs-akun-jeda");
+  if (jeda) jeda.onclick = async () => {
+    if (A.aktif && !await konfirmasi("Robot Shopee dijeda: jadwal Senin & tanggal 3 dilewati sampai diaktifkan lagi. Akun tetap tersimpan.", "Jeda robot", "Batal")) return;
+    jeda.disabled = true;
+    const { error } = await SB.rpc("shopee_akun_atur", { p_company: AKUN.usahaId, p_aktif: !A.aktif });
+    if (error){ pesan(error.message, "Robot Shopee"); jeda.disabled = false; return; }
+    rsMuat(true);
+  };
   const otp = $("#rs-otp-kirim");
   if (otp) otp.onclick = async () => {
     const k = ($("#rs-otp").value || "").trim();
@@ -9261,6 +9293,76 @@ function rsGambar(){
     rsMuat(true);
   });
   el.querySelectorAll("[data-rs-impor]").forEach(b => b.onclick = () => rsImpor(b.dataset.rsImpor, b));
+}
+
+/* Kartu saat akun Shopee belum dihubungkan, atau saat pemilik mengganti akun / password */
+function rsGambarAkun(el, A){
+  const ganti = !!A.terhubung;
+  const langkah = `<ol class="rs-langkah">
+      <li><strong>Buat sub akun</strong> di Shopee Seller Centre (Akun Utama → Sub Akun) yang bisa membuka semua toko Anda.</li>
+      <li><strong>Hubungkan di sini</strong>: isi nama login sub akun &amp; password-nya.</li>
+      <li><strong>Klik Uji login.</strong> Login pertama biasanya minta OTP; kodenya Anda ketik di kartu ini.</li></ol>`;
+  let isi;
+  if (A.demo){
+    isi = `<div class="hint" style="margin:0">Akun demo tidak bisa dihubungkan ke Shopee. Robot Shopee hanya untuk usaha sungguhan.</div>${langkah}`;
+  } else if (!A.boleh_atur){
+    isi = `<div class="hint" style="margin:0">Robot Shopee belum dihubungkan. <strong>Pemilik usaha</strong> yang bisa menghubungkan akun Shopee-nya di kartu ini.</div>`;
+  } else {
+    isi = `${ganti ? "" : `<p class="status" style="margin:0 0 12px">Robot mengambil Laporan Penghasilan (Sudah Dilepas) &amp; mutasi Saldo Penjual
+        semua toko di sub akun Anda tiap Senin dan tanggal 3, lalu menitipkannya di sini untuk diimpor satu klik.</p>${langkah}`}
+      <form id="rs-akun-form" autocomplete="off" style="margin-top:14px">
+        <div class="grid2">
+          <div class="field"><label for="rs-user">Nama login sub akun</label>
+            <input id="rs-user" autocomplete="off" spellcheck="false" placeholder="NamaUtama:namasub" value="${esc(A.username || "")}">
+            <span class="status">Persis seperti di kotak "Log In Akun Utama/Sub Akun", termasuk titik dua.</span></div>
+          ${kotakSandi("rs-sandi", "Password sub akun", "new-password", ganti ? "Kosongkan bila tidak diganti" : "Password sub akun Shopee")}
+        </div>
+        <div class="status" style="margin:10px 0 12px">🔒 Password disimpan terenkripsi di brankas Business Manager dan tidak bisa dilihat lagi oleh siapa pun — hanya bisa diganti.
+          Hanya robot yang memakainya, dan hanya untuk usaha ini.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button type="submit" class="btn primary" id="rs-akun-simpan">${ganti ? "Simpan perubahan" : "Hubungkan akun Shopee"}</button>
+          ${ganti ? `<button type="button" class="btn ghost" id="rs-akun-batal">Batal</button>
+            <span style="flex:1"></span><button type="button" class="btn ghost" id="rs-akun-putus" style="color:var(--neg)">Putuskan akun</button>` : ""}
+        </div>
+      </form>`;
+  }
+  el.innerHTML = `<div class="hd"><h2>Robot Shopee</h2>
+      <span class="note">${ganti ? "Ganti akun / password sub akun" : "Belum terhubung"}</span></div>
+    <div class="bd">${isi}</div>`;
+  const $ = s => el.querySelector(s);
+  el.querySelectorAll("[data-mata]").forEach(b => b.onclick = () => {
+    const inp = document.getElementById(b.dataset.mata); if (!inp) return;
+    const tampil = inp.type === "password";
+    inp.type = tampil ? "text" : "password";
+    b.setAttribute("aria-pressed", tampil ? "true" : "false");
+    const t = tampil ? "Sembunyikan kata sandi" : "Tampilkan kata sandi"; b.setAttribute("aria-label", t); b.title = t;
+    const buka = b.querySelector(".buka"), tutup = b.querySelector(".tutup");
+    if (buka && tutup){ buka.hidden = tampil; tutup.hidden = !tampil; }
+    inp.focus();
+  });
+  const batal = $("#rs-akun-batal");
+  if (batal) batal.onclick = () => { RS.form = false; rsGambar(); };
+  const putus = $("#rs-akun-putus");
+  if (putus) putus.onclick = async () => {
+    if (!await konfirmasi("Akun Shopee dilepas dari usaha ini dan password-nya dihapus dari brankas. Robot berhenti sampai akun dihubungkan lagi. File & data yang sudah ada tetap aman.", "Putuskan akun", "Batal")) return;
+    const { error } = await SB.rpc("shopee_akun_putus", { p_company: AKUN.usahaId });
+    if (error){ pesan(error.message, "Robot Shopee"); return; }
+    RS.form = false; rsMuat(true);
+  };
+  const form = $("#rs-akun-form");
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    const u = ($("#rs-user").value || "").trim(), p = $("#rs-sandi").value || "";
+    if (!/^[^:\s]+:[^:\s]+$/.test(u)){ pesan("Nama login sub akun harus berformat NamaUtama:namasub (ada titik dua), contoh TokoSaya:robot."); $("#rs-user").focus(); return; }
+    if (!ganti && !p){ pesan("Isi password sub akun Shopee."); $("#rs-sandi").focus(); return; }
+    const b = $("#rs-akun-simpan"), lbl = b.textContent; b.disabled = true; b.textContent = "Menyimpan…";
+    const { error } = await SB.rpc("shopee_akun_simpan", { p_company: AKUN.usahaId, p_user: u, p_sandi: p });
+    $("#rs-sandi").value = "";
+    if (error){ pesan(error.message, "Robot Shopee"); b.disabled = false; b.textContent = lbl; return; }
+    RS.form = false;
+    await rsMuat(true);
+    pesan(ganti ? "Akun Shopee diperbarui." : "Akun Shopee terhubung. Klik Uji login untuk mencoba — siapkan HP untuk kode OTP.", "Robot Shopee");
+  };
 }
 
 async function rsImpor(id, tombol){
