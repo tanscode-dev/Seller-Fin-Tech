@@ -9238,7 +9238,9 @@ function rsGambar(){
         : `<div class="status" style="margin:6px 0 10px">Tidak ada file ${key === "mutasi" ? "mutasi saldo" : "penghasilan"} baru dari robot.</div>`}
       ${fileLain ? `<div class="status" style="margin-bottom:10px">${fileLain} file ${key === "mutasi" ? "penghasilan" : "mutasi saldo"} menunggu di halaman ${key === "mutasi" ? "Penghasilan Marketplace" : "Mutasi Saldo"}.</div>` : ""}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <label class="status">Periode <input type="date" id="rs-dari" value="${dariDef}"> – <input type="date" id="rs-sampai" value="${sampaiDef}"></label>
+        <span class="status" style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">Periode
+          <input type="date" id="rs-dari" value="${dariDef}" aria-label="Dari tanggal" style="width:auto"> –
+          <input type="date" id="rs-sampai" value="${sampaiDef}" aria-label="Sampai tanggal" style="width:auto"></span>
         <button type="button" class="btn primary" id="rs-jalan"${jalan || !A.aktif ? " disabled" : ""}>Ambil sekarang</button>
         <button type="button" class="btn ghost" id="rs-uji"${jalan || !A.aktif ? " disabled" : ""} title="Login, baca daftar toko, buka toko pertama sampai Penghasilan Saya — tanpa mengambil data">Uji login</button>
         ${R && R.log_url ? `<a class="btn ghost" href="${esc(R.log_url)}" target="_blank" rel="noopener">Log robot</a>` : ""}
