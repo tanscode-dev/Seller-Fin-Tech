@@ -8251,6 +8251,8 @@ document.addEventListener("click", async e => {
   }
   if (t.id === "btn-keluar"){ await keluar(); return; }
   if (t.id === "btn-theme"){
+    // di dalam Business Manager: satu tema untuk semua aplikasi (BM, Seller, Raksa, Invoice, Hitung)
+    if (window.BMTema){ BMTema.ganti(); return; }
     const cur = document.documentElement.getAttribute("data-theme");
     const sysDark = matchMedia("(prefers-color-scheme: dark)").matches;
     const next = cur ? (cur === "dark" ? "light" : "dark") : (sysDark ? "light" : "dark");
@@ -9308,7 +9310,7 @@ function rsGambarAkun(el, A){
   if (A.demo){
     isi = `<div class="hint" style="margin:0">Akun demo tidak bisa dihubungkan ke Shopee. Robot Shopee hanya untuk usaha sungguhan.</div>${langkah}`;
   } else if (!A.boleh_atur){
-    isi = `<div class="hint" style="margin:0">Robot Shopee belum dihubungkan. <strong>Pemilik usaha</strong> yang bisa menghubungkan akun Shopee-nya di kartu ini.</div>`;
+    isi = `<div class="hint" style="margin:0">Robot Shopee belum dihubungkan. Yang bisa menghubungkan: <strong>pemilik usaha</strong> atau pengguna dengan <strong>akses penuh Seller</strong> (hak Pengaturan).</div>`;
   } else {
     isi = `${ganti ? "" : `<p class="status" style="margin:0 0 12px">Robot mengambil Laporan Penghasilan (Sudah Dilepas) &amp; mutasi Saldo Penjual
         semua toko di sub akun Anda tiap Senin dan tanggal 3, lalu menitipkannya di sini untuk diimpor satu klik.</p>${langkah}`}
