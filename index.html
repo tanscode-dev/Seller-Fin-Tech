@@ -465,6 +465,21 @@ tbody tr.sub:hover td{background:var(--surface3)}
 /* ---------- misc ---------- */
 .hint{background:var(--surface2); border-left:3px solid var(--accent); padding:11px 14px; border-radius:0 8px 8px 0; font-size:12.5px; color:var(--ink2); margin-bottom:16px}
 .hint code{font-family:"IBM Plex Mono",monospace; font-size:11.5px; background:var(--surface3); padding:1px 5px; border-radius:4px}
+.rs-panel,.rs-otp{display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:12px 14px; margin-bottom:12px; border-radius:12px;
+  background:var(--surface2); border:1px solid var(--line)}
+.rs-otp{display:block; background:var(--warn-soft); border:1px solid var(--warn); box-shadow:0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent)}
+.rs-putar{width:18px; height:18px; border-radius:50%; border:2.5px solid var(--line); border-top-color:var(--accent, #ee4d2d); animation:gsp .8s linear infinite; flex:none}
+.rs-hasil{padding:10px 14px; border-radius:10px; margin-bottom:12px; font-size:13px; border-left:3px solid}
+.rs-hasil.ok{background:color-mix(in srgb, var(--pos) 10%, transparent); border-color:var(--pos)}
+.rs-hasil.bad{background:color-mix(in srgb, var(--neg) 10%, transparent); border-color:var(--neg)}
+.rs-layar{display:block; max-width:100%; margin-top:10px; border-radius:8px; border:1px solid var(--line)}
+#rs-toast-wadah{position:fixed; right:16px; bottom:16px; z-index:9999; display:flex; flex-direction:column; gap:8px; max-width:min(420px, calc(100vw - 32px))}
+.rs-toast{display:flex; gap:10px; align-items:center; padding:12px 14px; border-radius:12px; background:var(--surface); color:var(--ink);
+  border:1px solid var(--line); box-shadow:0 10px 30px rgba(0,0,0,.25); font-size:13px; animation:rsMasuk .2s ease-out}
+.rs-toast.ok{border-left:4px solid var(--pos)} .rs-toast.bad{border-left:4px solid var(--neg)} .rs-toast.warn{border-left:4px solid var(--warn)}
+.rs-toast button{background:none; border:0; color:var(--ink2); font-size:18px; cursor:pointer; padding:0 2px}
+.rs-toast .rs-ikon{width:26px; height:26px; font-size:13px; border-radius:7px}
+@keyframes rsMasuk{from{transform:translateY(8px); opacity:0}}
 .rs-akun{display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:12px 14px; margin-bottom:12px;
   background:var(--surface2); border:1px solid var(--line); border-radius:12px}
 .rs-ikon{width:36px; height:36px; border-radius:10px; display:grid; place-items:center; flex:none;
@@ -9147,7 +9162,43 @@ const kunciGanti = (key, r) => platDari(r) + "|" + String(r.toko || "") + "|" + 
    isinya tetap bisa diperiksa sebelum masuk buku. */
 /* Plug and play: tiap usaha menghubungkan sub akun Shopee-nya sendiri (hanya pemilik usaha).
    Password disimpan terenkripsi di brankas BM dan tidak pernah dikirim balik ke layar. */
-const RS = { run:null, file:[], peta:[], akun:null, dimuat:0, t:null, sibuk:false, form:false, usaha:null };
+const RS = { run:null, file:[], peta:[], akun:null, dimuat:0, t:null, sibuk:false, form:false, usaha:null,
+  img:null, imgKunci:"", lihatImg:false, otpTerkirim:"", stLalu:{}, judulAsli:"", tik:null };
+/* Kabar Robot Shopee: toast di layar, notifikasi browser (bila diizinkan), bunyi singkat, dan judul tab */
+function rsToast(teks, jenis){
+  let w = document.getElementById("rs-toast-wadah");
+  if (!w){ w = document.createElement("div"); w.id = "rs-toast-wadah"; document.body.appendChild(w); }
+  const t = document.createElement("div");
+  t.className = "rs-toast " + (jenis || ""); t.setAttribute("role", "status");
+  t.innerHTML = `<span class="rs-ikon" aria-hidden="true">S</span><span style="flex:1">${esc(teks)}</span><button type="button" aria-label="Tutup">×</button>`;
+  t.querySelector("button").onclick = () => t.remove();
+  w.appendChild(t);
+  setTimeout(() => t.remove(), jenis === "bad" ? 15000 : 9000);
+}
+function rsBunyi(){
+  try { const C = new (window.AudioContext || window.webkitAudioContext)(); const o = C.createOscillator(), g = C.createGain();
+    o.connect(g); g.connect(C.destination); o.frequency.value = 880; g.gain.value = .08; o.start();
+    o.frequency.setValueAtTime(660, C.currentTime + .15); o.stop(C.currentTime + .32); } catch(e){}
+}
+function rsNotif(judul, teks){
+  try { if ("Notification" in window && Notification.permission === "granted" && document.hidden)
+    new Notification(judul, { body: teks, tag: "robot-shopee", icon: "/bm-192.png" }); } catch(e){}
+}
+function rsMintaIzinNotif(){ try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch(e){} }
+function rsKabar(R){
+  if (!R) return;
+  const lalu = RS.stLalu[R.id], kunci = R.status + "|" + (R.otp_minta || "");
+  RS.stLalu[R.id] = kunci;
+  if (!RS.judulAsli) RS.judulAsli = document.title.replace(/^🔔[^·]*· /, "");
+  document.title = R.status === "MENUNGGU_OTP" ? "🔔 Kode OTP Shopee · " + RS.judulAsli : RS.judulAsli;
+  if (lalu === undefined || lalu === kunci) return;            // pertama dimuat / tidak berubah
+  if (R.status === "MENUNGGU_OTP"){ rsToast("Robot Shopee butuh kode OTP — cek SMS/WA, lalu ketik di kartu Robot Shopee.", "warn"); rsBunyi(); rsNotif("Robot Shopee butuh kode OTP", R.otp_pesan || "Ketik kodenya di Seller Fintech."); }
+  else if (R.status === "BERHASIL"){ rsToast("Robot Shopee selesai. " + (R.hasil || ""), "ok"); rsBunyi(); rsNotif("Robot Shopee selesai", R.hasil || ""); }
+  else if (R.status === "SEBAGIAN"){ rsToast("Robot Shopee selesai sebagian. " + (R.hasil || ""), "bad"); rsBunyi(); rsNotif("Robot Shopee selesai sebagian", R.hasil || ""); }
+  else if (R.status === "GAGAL"){ rsToast("Robot Shopee berhenti: " + (R.hasil || ""), "bad"); rsBunyi(); rsNotif("Robot Shopee berhenti", R.hasil || ""); }
+  else if (R.status === "BERJALAN" && /^MENUNGGU_OTP/.test(lalu)) rsToast("Kode diterima robot, sedang diverifikasi Shopee…", "");
+}
+const rsLama = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000)); return m < 60 ? m + " dtk" : Math.floor(m / 60) + " mnt " + (m % 60) + " dtk"; };
 const rsTampil = () => !!(AKUN && AKUN.usahaId && SB);
 const rsWaktu = iso => {
   if (!iso) return "—";
@@ -9170,7 +9221,7 @@ async function rsMuat(paksa){
   try {
     const [a, r, f, p] = await Promise.all([
       SB.rpc("shopee_akun_info", { p_company: AKUN.usahaId }),
-      SB.from("shopee_robot_run").select("id,status,jenis,mode,dari_tgl,sampai_tgl,oleh,dibuat,mulai,selesai,hasil,langkah,otp_minta,otp_pesan,log_url")
+      SB.from("shopee_robot_run").select("id,status,jenis,mode,dari_tgl,sampai_tgl,oleh,dibuat,mulai,selesai,hasil,langkah,otp_minta,otp_pesan,otp_aksi,log_url")
         .eq("company_id", AKUN.usahaId).order("dibuat", { ascending:false }).limit(1),
       SB.from("shopee_robot_file").select("id,nama_shopee,jenis,dari_tgl,sampai_tgl,path,nama_file,status,dibuat")
         .eq("company_id", AKUN.usahaId).eq("status", "baru").order("dibuat", { ascending:false }).limit(200),
@@ -9179,12 +9230,24 @@ async function rsMuat(paksa){
     if (a.error || r.error){ const el = document.getElementById("rs-kartu"); if (el) el.remove(); return; }
     RS.akun = a.data || {};
     RS.run = (r.data || [])[0] || null; RS.file = f.data || []; RS.peta = p.data || []; RS.dimuat = Date.now();
+    // layar Shopee terakhir (hanya diambil saat perlu: menunggu OTP atau berhenti)
+    const R = RS.run, kunci = R && ["MENUNGGU_OTP","GAGAL","SEBAGIAN"].includes(R.status) ? R.id + "|" + R.status + "|" + (R.otp_minta || "") + "|" + (R.otp_pesan || "") + "|" + (R.selesai || "") : "";
+    if (kunci !== RS.imgKunci){
+      RS.imgKunci = kunci; RS.img = null;
+      if (kunci){ const g = await SB.from("shopee_robot_run").select("debug_img").eq("id", R.id).limit(1); RS.img = ((g.data || [])[0] || {}).debug_img || null; }
+    }
+    rsKabar(R);
   } catch(e){ return; }
   // jangan menggambar ulang saat orang sedang mengetik di kartu (OTP / form akun)
   const el = document.getElementById("rs-kartu"), fokus = document.activeElement;
   if (!(el && fokus && el.contains(fokus) && /^(INPUT|SELECT|TEXTAREA)$/.test(fokus.tagName))) rsGambar();
   clearTimeout(RS.t);
-  if (RS.run && ["ANTRE","BERJALAN","MENUNGGU_OTP"].includes(RS.run.status)) RS.t = setTimeout(() => rsMuat(true), 5000);
+  if (RS.run && ["ANTRE","BERJALAN","MENUNGGU_OTP"].includes(RS.run.status)) RS.t = setTimeout(() => rsMuat(true), 4000);
+  // hitung mundur / lama berjalan diperbarui tiap detik tanpa memuat ulang data
+  clearInterval(RS.tik);
+  RS.tik = setInterval(() => { document.querySelectorAll("[data-rs-lama]").forEach(x => x.textContent = rsLama(x.dataset.rsLama));
+    document.querySelectorAll("[data-rs-sisa]").forEach(x => { const d = Math.max(0, Math.round((new Date(x.dataset.rsSisa).getTime() + 600e3 - Date.now()) / 1000));
+      x.textContent = Math.floor(d / 60) + ":" + String(d % 60).padStart(2, "0"); }); }, 1000);
 }
 
 function rsGambar(){
@@ -9214,14 +9277,37 @@ function rsGambar(){
           <button type="button" class="btn ghost" id="rs-akun-jeda">${A.aktif ? "Jeda robot" : "Aktifkan lagi"}</button>` : ""}
       </div>
       ${!A.aktif ? `<div class="warnbox">Robot Shopee sedang dijeda: jadwal otomatis dilewati dan tombol Ambil sekarang tidak bisa dipakai.</div>` : ""}
-      ${R ? `<div class="status" style="margin-bottom:10px">Terakhir: ${esc(R.mode === "eksplor" ? "uji login" : (R.jenis === "MANUAL" ? "manual" : R.jenis.toLowerCase()))}
-        · periode ${esc(fmtD(R.dari_tgl))}–${esc(fmtD(R.sampai_tgl))} · ${esc(rsWaktu(R.mulai || R.dibuat))}${R.oleh ? " · " + esc(R.oleh) : ""}
-        ${jalan && R.langkah ? `<br>Langkah: ${esc(R.langkah)}` : ""}
-        ${!jalan && R.hasil ? `<br>${esc(R.hasil)}` : ""}</div>` : ""}
-      ${R && R.status === "MENUNGGU_OTP" ? `<div class="warnbox" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <span style="flex:1;min-width:240px"><strong>Shopee meminta kode OTP.</strong> ${esc(R.otp_pesan || "")}</span>
-        <input id="rs-otp" inputmode="numeric" autocomplete="one-time-code" placeholder="Kode OTP" style="width:130px">
-        <button type="button" class="btn primary" id="rs-otp-kirim">Kirim kode</button></div>` : ""}
+      ${R ? `<div class="status" style="margin-bottom:10px">${jalan ? "Sedang dijalankan" : "Terakhir"}: ${esc(R.mode === "eksplor" ? "uji login" : (R.jenis === "MANUAL" ? "manual" : R.jenis.toLowerCase()))}
+        · periode ${esc(fmtD(R.dari_tgl))}–${esc(fmtD(R.sampai_tgl))} · ${esc(rsWaktu(R.mulai || R.dibuat))}${R.oleh ? " · " + esc(R.oleh) : ""}</div>` : ""}
+      ${jalan && R.status !== "MENUNGGU_OTP" ? `<div class="rs-panel">
+        <span class="rs-putar" aria-hidden="true"></span>
+        <span style="flex:1;min-width:220px"><strong>${R.status === "ANTRE" ? "Menyiapkan robot di GitHub…" : "Robot sedang bekerja…"}</strong>
+          <br><span class="status">${esc(R.status === "ANTRE" ? "Biasanya 30–60 detik sebelum robot mulai." : (R.otp_pesan && /diterima robot/.test(R.otp_pesan) ? R.otp_pesan : (R.langkah || "Memulai…")))}
+          · berjalan <span data-rs-lama="${esc(R.mulai || R.dibuat)}">${rsLama(R.mulai || R.dibuat)}</span></span></span>
+        <button type="button" class="btn ghost" id="rs-batal">Batalkan</button></div>` : ""}
+      ${R && R.status === "MENUNGGU_OTP" ? (RS.otpTerkirim === (R.otp_minta || "x") ? `<div class="rs-panel">
+        <span class="rs-putar" aria-hidden="true"></span>
+        <span style="flex:1"><strong>Kode terkirim ✓</strong><br><span class="status">Robot sedang memasukkan kode ke Shopee…</span></span>
+        <button type="button" class="btn ghost" id="rs-batal">Batalkan</button></div>` : `<div class="rs-otp">
+        <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+          <span style="flex:1;min-width:240px"><strong style="font-size:14px">🔔 Shopee meminta kode OTP</strong>
+            <br><span>${esc(R.otp_pesan || "Kode dikirim ke nomor/email sub akun.")}</span>
+            <br><span class="status">Sisa waktu <strong data-rs-sisa="${esc(R.otp_minta || R.dibuat)}">10:00</strong> · Pakai kode <strong>terbaru</strong>. Kode lama tidak berlaku.</span></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+          <input id="rs-otp" inputmode="numeric" autocomplete="one-time-code" placeholder="6 angka" maxlength="8" style="width:150px;font-size:18px;letter-spacing:4px;text-align:center">
+          <button type="button" class="btn primary" id="rs-otp-kirim">Kirim kode</button>
+          <button type="button" class="btn ghost" id="rs-otp-ulang"${R.otp_aksi === "ulang" ? " disabled" : ""}>${R.otp_aksi === "ulang" ? "Meminta kode baru…" : "Kirim ulang kode"}</button>
+          ${RS.img ? `<button type="button" class="btn ghost" id="rs-lihat">${RS.lihatImg ? "Sembunyikan layar Shopee" : "Lihat layar Shopee"}</button>` : ""}
+          <span style="flex:1"></span><button type="button" class="btn ghost" id="rs-batal">Batalkan</button>
+        </div>
+        ${RS.img && RS.lihatImg ? `<img class="rs-layar" src="${RS.img}" alt="Layar Shopee yang dilihat robot">` : ""}
+        <div class="status" style="margin-top:8px">Kode tidak masuk? Kode dikirim Shopee ke nomor HP / email yang terdaftar di <strong>sub akun</strong> (bisa berbeda dengan nomor Anda). Tunggu ±1 menit lalu klik <strong>Kirim ulang kode</strong>.</div>
+      </div>`) : ""}
+      ${R && !jalan && R.hasil ? `<div class="${R.status === "BERHASIL" ? "rs-hasil ok" : "rs-hasil bad"}">
+        <strong>${R.status === "BERHASIL" ? "✓ Berhasil" : R.status === "SEBAGIAN" ? "Sebagian berhasil" : "✗ Berhenti"}</strong> · ${esc(R.hasil)}
+        ${RS.img && R.status !== "BERHASIL" ? `<br><button type="button" class="btn ghost" id="rs-lihat" style="margin-top:6px">${RS.lihatImg ? "Sembunyikan layar terakhir" : "Lihat layar terakhir robot"}</button>
+          ${RS.lihatImg ? `<img class="rs-layar" src="${RS.img}" alt="Layar terakhir robot">` : ""}` : ""}</div>` : ""}
       ${belumPeta.length ? `<div class="hint"><strong>${belumPeta.length} toko Shopee baru ditemukan.</strong>
         Pilih nama tokonya di buku ini supaya datanya masuk ke toko &amp; badan usaha yang benar. File toko ini ditahan sampai dipilih.
         ${belumPeta.map(p => `<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
@@ -9243,21 +9329,45 @@ function rsGambar(){
         <span class="status" style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">Periode
           <input type="date" id="rs-dari" value="${dariDef}" aria-label="Dari tanggal" style="width:auto"> –
           <input type="date" id="rs-sampai" value="${sampaiDef}" aria-label="Sampai tanggal" style="width:auto"></span>
-        <button type="button" class="btn primary" id="rs-jalan"${jalan || !A.aktif ? " disabled" : ""}>Ambil sekarang</button>
-        <button type="button" class="btn ghost" id="rs-uji"${jalan || !A.aktif ? " disabled" : ""} title="Login, baca daftar toko, buka toko pertama sampai Penghasilan Saya — tanpa mengambil data">Uji login</button>
+        ${jalan ? `<span class="status">Tombol Ambil sekarang &amp; Uji login aktif lagi setelah robot selesai (atau klik Batalkan).</span>` : `
+        <button type="button" class="btn primary" id="rs-jalan"${!A.aktif ? " disabled" : ""}>Ambil sekarang</button>
+        <button type="button" class="btn ghost" id="rs-uji"${!A.aktif ? " disabled" : ""} title="Login, baca daftar toko, buka toko pertama sampai Penghasilan Saya — tanpa mengambil data">Uji login</button>`}
         ${R && R.log_url ? `<a class="btn ghost" href="${esc(R.log_url)}" target="_blank" rel="noopener">Log robot</a>` : ""}
       </div>
     </div>`;
   const $ = s => el.querySelector(s);
-  const jalankan = async mode => {
+  const jalankan = async (mode, b) => {
     const d1 = $("#rs-dari").value, d2 = $("#rs-sampai").value;
     if (!d1 || !d2 || d2 < d1){ pesan("Periode belum benar."); return; }
+    rsMintaIzinNotif();
+    b.disabled = true; b.textContent = "Menyalakan robot…";
     const { error } = await SB.rpc("shopee_robot_jalankan", { p_company: AKUN.usahaId, p_dari: d1, p_sampai: d2, p_mode: mode });
-    if (error){ pesan(error.message, "Robot Shopee"); return; }
+    if (error){ pesan(error.message, "Robot Shopee"); rsGambar(); return; }
+    rsToast(mode === "eksplor" ? "Uji login dimulai. Siapkan HP untuk kode OTP." : "Robot Shopee mulai mengambil data.", "");
     rsMuat(true);
   };
-  $("#rs-jalan").onclick = () => jalankan("biasa");
-  $("#rs-uji").onclick = () => jalankan("eksplor");
+  const bJalan = $("#rs-jalan"), bUji = $("#rs-uji");
+  if (bJalan) bJalan.onclick = () => jalankan("biasa", bJalan);
+  if (bUji) bUji.onclick = () => jalankan("eksplor", bUji);
+  el.querySelectorAll("#rs-batal").forEach(b => b.onclick = async () => {
+    if (!await konfirmasi("Hentikan robot yang sedang berjalan? File yang sudah terambil tetap tersimpan.", "Batalkan robot", "Lanjutkan")) return;
+    b.disabled = true;
+    const { data, error } = await SB.rpc("shopee_robot_batal", { p_run: R.id });
+    if (error || !data){ pesan((error && error.message) || "Robot sudah tidak berjalan.", "Robot Shopee"); }
+    rsMuat(true);
+  });
+  const lihat = $("#rs-lihat");
+  if (lihat) lihat.onclick = () => { RS.lihatImg = !RS.lihatImg; rsGambar(); };
+  const ulang = $("#rs-otp-ulang");
+  if (ulang) ulang.onclick = async () => {
+    ulang.disabled = true; ulang.textContent = "Meminta kode baru…";
+    const { data, error } = await SB.rpc("shopee_robot_otp_ulang", { p_run: R.id });
+    if (error || !data){ pesan((error && error.message) || "Robot sudah tidak menunggu kode.", "Robot Shopee"); }
+    else rsToast("Permintaan kirim ulang diteruskan ke Shopee. Tunggu SMS/WA ±1 menit.", "");
+    rsMuat(true);
+  };
+  const otpIn = $("#rs-otp");
+  if (otpIn) otpIn.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); $("#rs-otp-kirim").click(); } };
   const ubah = $("#rs-akun-ubah");
   if (ubah) ubah.onclick = () => { RS.form = true; rsGambar(); };
   const jeda = $("#rs-akun-jeda");
@@ -9274,8 +9384,10 @@ function rsGambar(){
     if (!/^\d{4,8}$/.test(k)){ pesan("Kode OTP biasanya 6 angka."); return; }
     const { data, error } = await SB.rpc("shopee_robot_otp", { p_run: R.id, p_kode: k });
     if (error || !data){ pesan((error && error.message) || "Kode tidak terkirim — mungkin robot sudah tidak menunggu.", "Robot Shopee"); return; }
-    $("#rs-otp").value = ""; otp.disabled = true; otp.textContent = "Terkirim…";
-    rsMuat(true);
+    RS.otpTerkirim = R.otp_minta || "x";
+    document.activeElement && document.activeElement.blur && document.activeElement.blur();
+    rsToast("Kode terkirim ke robot. Menunggu Shopee memverifikasi…", "");
+    rsGambar(); rsMuat(true);
   };
   el.querySelectorAll("[data-rs-simpan]").forEach(b => b.onclick = async () => {
     const nama = b.dataset.rsSimpan;
