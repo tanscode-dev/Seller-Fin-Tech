@@ -466,6 +466,12 @@ tbody tr.sub:hover td{background:var(--surface3)}
 .hint{background:var(--surface2); border-left:3px solid var(--accent); padding:11px 14px; border-radius:0 8px 8px 0; font-size:12.5px; color:var(--ink2); margin-bottom:16px}
 .hint code{font-family:"IBM Plex Mono",monospace; font-size:11.5px; background:var(--surface3); padding:1px 5px; border-radius:4px}
 #rs-kartu .btn:disabled{opacity:.45; cursor:not-allowed; filter:grayscale(.4)}
+.rs-mp-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px}
+.rs-mp{padding:14px; border-radius:12px; background:var(--surface2); border:1px solid var(--line); display:flex; flex-direction:column; gap:0}
+.rs-mp > .btn{margin-top:12px !important}
+.rs-mp-toko{display:flex; gap:8px; align-items:center; padding:9px 0; border-top:1px solid var(--line); margin-top:10px}
+.rs-mp-toko + .rs-mp-toko{margin-top:0}
+.btn.kecil{padding:5px 10px; font-size:12px}
 .rs-api{padding:12px 14px; margin-bottom:12px; border-radius:12px; background:var(--surface2); border:1px solid var(--line)}
 .rs-api-toko{display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:9px 0 9px 46px; border-top:1px solid var(--line)}
 .rs-panel,.rs-otp{display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:12px 14px; margin-bottom:12px; border-radius:12px;
@@ -3019,8 +3025,8 @@ const NAV = [
 ];
 let page = "ringkasan";
 // kembali dari otorisasi Shopee (API resmi) → langsung ke Penghasilan Marketplace dan beri kabar
-const RS_KEMBALI = (() => { try { const q = new URLSearchParams(location.search); if (!q.get("shopee")) return null;
-  const k = { status: q.get("shopee"), pesan: q.get("pesan") || "" }; history.replaceState(null, "", location.pathname); return k; } catch(e){ return null; } })();
+const RS_KEMBALI = (() => { try { const q = new URLSearchParams(location.search); if (!q.get("mp")) return null;
+  const k = { platform: q.get("mp"), status: q.get("hasil"), pesan: q.get("pesan") || "" }; history.replaceState(null, "", location.pathname); return k; } catch(e){ return null; } })();
 if (RS_KEMBALI) page = "income";
 /* Halaman mana menuntut kewenangan apa. Yang tidak disebut boleh dibuka siapa pun
    yang sudah masuk. Ini lapis kenyamanan; penjagaan yang sebenarnya ada di RLS. */
@@ -3310,7 +3316,7 @@ function viewTable(key){
   }).join("");
   return `
   <div class="pagehead"><h1>${esc(T.label)}</h1>${pandu(esc(PANDUAN[key] || ""))}</div>
-  ${(key === "income" || key === "mutasi") && rsTampil() ? `<div id="rs-kartu" class="card" style="margin-bottom:16px"><div class="bd status">Memuat Robot Shopee…</div></div>` : ""}
+  ${(key === "income" || key === "mutasi") && rsTampil() ? `<div id="rs-kartu" class="card" style="margin-bottom:16px"><div class="bd status">Memuat Koneksi Marketplace…</div></div>` : ""}
   ${(() => {
     if (key !== "iklan") return "";
     const auto = S.income.filter(x => inPeriod(x.tgl)).reduce((s,x) => s + num(x.iklanAuto), 0);
@@ -9162,13 +9168,11 @@ const kunciGanti = (key, r) => platDari(r) + "|" + String(r.toko || "") + "|" + 
   ? String(r.tgl || "").slice(0,7)
   : String(r.tgl || ""));
 
-/* ===== Robot Shopee (Robot 3) =====
-   Robot di GitHub mengambil Laporan Penghasilan (Sudah Dilepas) dan mutasi Saldo Penjual
-   tiap toko Shopee lewat satu sub akun, lalu menitipkan filenya di sini. File TIDAK masuk
-   sendiri: tombol Impor membuka layar impor yang biasa dengan toko sudah terisi, jadi
-   isinya tetap bisa diperiksa sebelum masuk buku. */
-/* Plug and play: tiap usaha menghubungkan sub akun Shopee-nya sendiri (hanya pemilik usaha).
-   Password disimpan terenkripsi di brankas BM dan tidak pernah dikirim balik ke layar. */
+/* ===== Koneksi Marketplace (API resmi Shopee, TikTok Shop, Lazada) =====
+   Tiap usaha menghubungkan tokonya lewat halaman izin resmi marketplace (OAuth): Business Manager
+   tidak pernah menerima password marketplace. Data diambil otomatis (Senin & tanggal 3) atau lewat
+   Ambil sekarang, lalu dititipkan di sini. File TIDAK masuk sendiri: tombol Impor membuka layar
+   impor yang biasa dengan toko sudah terisi, jadi isinya tetap bisa diperiksa sebelum masuk buku. */
 const RS = { run:null, file:[], peta:[], akun:null, dimuat:0, t:null, sibuk:false, form:false, usaha:null,
   img:null, imgKunci:"", lihatImg:false, otpTerkirim:"", stLalu:{}, judulAsli:"", tik:null, api:[], apiSiap:null };
 /* Kabar Robot Shopee: toast di layar, notifikasi browser (bila diizinkan), bunyi singkat, dan judul tab */
@@ -9197,13 +9201,11 @@ function rsKabar(R){
   const lalu = RS.stLalu[R.id], kunci = R.status + "|" + (R.otp_minta || "");
   RS.stLalu[R.id] = kunci;
   if (!RS.judulAsli) RS.judulAsli = document.title.replace(/^🔔[^·]*· /, "");
-  document.title = R.status === "MENUNGGU_OTP" ? "🔔 Kode OTP Shopee · " + RS.judulAsli : RS.judulAsli;
+  document.title = RS.judulAsli;
   if (lalu === undefined || lalu === kunci) return;            // pertama dimuat / tidak berubah
-  if (R.status === "MENUNGGU_OTP"){ rsToast("Robot Shopee butuh kode OTP — cek SMS/WA, lalu ketik di kartu Robot Shopee.", "warn"); rsBunyi(); rsNotif("Robot Shopee butuh kode OTP", R.otp_pesan || "Ketik kodenya di Seller Fintech."); }
-  else if (R.status === "BERHASIL"){ rsToast("Robot Shopee selesai. " + (R.hasil || ""), "ok"); rsBunyi(); rsNotif("Robot Shopee selesai", R.hasil || ""); }
-  else if (R.status === "SEBAGIAN"){ rsToast("Robot Shopee selesai sebagian. " + (R.hasil || ""), "bad"); rsBunyi(); rsNotif("Robot Shopee selesai sebagian", R.hasil || ""); }
-  else if (R.status === "GAGAL"){ rsToast("Robot Shopee berhenti: " + (R.hasil || ""), "bad"); rsBunyi(); rsNotif("Robot Shopee berhenti", R.hasil || ""); }
-  else if (R.status === "BERJALAN" && /^MENUNGGU_OTP/.test(lalu)) rsToast("Kode diterima robot, sedang diverifikasi Shopee…", "");
+  if (R.status === "BERHASIL"){ rsToast("Data marketplace selesai diambil. " + (R.hasil || ""), "ok"); rsBunyi(); rsNotif("Data marketplace selesai diambil", R.hasil || ""); }
+  else if (R.status === "SEBAGIAN"){ rsToast("Sebagian toko gagal diambil. " + (R.hasil || ""), "bad"); rsBunyi(); rsNotif("Sebagian toko gagal diambil", R.hasil || ""); }
+  else if (R.status === "GAGAL"){ rsToast("Pengambilan berhenti: " + (R.hasil || ""), "bad"); rsBunyi(); rsNotif("Pengambilan data marketplace berhenti", R.hasil || ""); }
 }
 const rsLama = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000)); return m < 60 ? m + " dtk" : Math.floor(m / 60) + " mnt " + (m % 60) + " dtk"; };
 const rsTampil = () => !!(AKUN && AKUN.usahaId && SB);
@@ -9214,7 +9216,7 @@ const rsWaktu = iso => {
   return `${p.day}/${p.month}/${p.year} ${p.hour}.${p.minute} WIB`;
 };
 const RS_STATUS = {
-  ANTRE:["Menunggu GitHub", ""], BERJALAN:["Sedang berjalan", ""], MENUNGGU_OTP:["Butuh kode OTP", "bad"],
+  ANTRE:["Menyiapkan", ""], BERJALAN:["Sedang mengambil", ""], MENUNGGU_OTP:["Menunggu", "bad"],
   BERHASIL:["Berhasil", "ok"], SEBAGIAN:["Sebagian berhasil", "bad"], GAGAL:["Gagal", "bad"],
 };
 const rsTokoSeller = nama => ((RS.peta.find(p => p.nama_shopee === nama) || {}).toko_seller || "");
@@ -9233,25 +9235,20 @@ async function rsMuat(paksa){
       SB.from("shopee_robot_file").select("id,nama_shopee,jenis,dari_tgl,sampai_tgl,path,nama_file,status,dibuat")
         .eq("company_id", AKUN.usahaId).eq("status", "baru").order("dibuat", { ascending:false }).limit(200),
       SB.from("shopee_toko_peta").select("nama_shopee,toko_seller,aktif").eq("company_id", AKUN.usahaId).order("nama_shopee"),
-      SB.from("shopee_api_toko").select("shop_id,nama_toko,status,terhubung,token_sampai,ditarik_terakhir,catatan,oleh").eq("company_id", AKUN.usahaId).neq("status", "diputus").order("nama_toko"),
+      SB.from("mp_api_toko").select("platform,toko_id,nama_toko,status,terhubung,token_sampai,ditarik_terakhir,catatan,oleh").eq("company_id", AKUN.usahaId).neq("status", "diputus").order("nama_toko"),
     ]);
     RS.api = (ap && ap.data) || [];
     if (RS.apiSiap === null){
-      try { const st = await SB.functions.invoke("shopee-api", { body: { aksi: "status" } }); RS.apiSiap = !!(st.data && st.data.siap); RS.apiEnv = st.data && st.data.lingkungan; }
-      catch(e){ RS.apiSiap = false; }
+      try { const st = await SB.functions.invoke("shopee-api", { body: { aksi: "status" } }); RS.apiSiap = st.data || {}; }
+      catch(e){ RS.apiSiap = {}; }
     }
     if (RS_KEMBALI && !RS.kembaliDitampilkan){ RS.kembaliDitampilkan = true;
-      setTimeout(() => rsToast(RS_KEMBALI.pesan || (RS_KEMBALI.status === "terhubung" ? "Toko Shopee terhubung." : "Gagal menghubungkan toko Shopee."), RS_KEMBALI.status === "terhubung" ? "ok" : "bad"), 300); }
+      setTimeout(() => rsToast(RS_KEMBALI.pesan || (RS_KEMBALI.status === "terhubung" ? "Toko terhubung." : "Gagal menghubungkan toko."), RS_KEMBALI.status === "terhubung" ? "ok" : "bad"), 300); }
     if (a.error || r.error){ const el = document.getElementById("rs-kartu"); if (el) el.remove(); return; }
     RS.akun = a.data || {};
     RS.run = (r.data || [])[0] || null; RS.file = f.data || []; RS.peta = p.data || []; RS.dimuat = Date.now();
     // layar Shopee terakhir (hanya diambil saat perlu: menunggu OTP atau berhenti)
-    const R = RS.run, kunci = R && ["MENUNGGU_OTP","GAGAL","SEBAGIAN"].includes(R.status) ? R.id + "|" + R.status + "|" + (R.otp_minta || "") + "|" + (R.otp_pesan || "") + "|" + (R.selesai || "") : "";
-    if (kunci !== RS.imgKunci){
-      RS.imgKunci = kunci; RS.img = null;
-      if (kunci){ const g = await SB.from("shopee_robot_run").select("debug_img").eq("id", R.id).limit(1); RS.img = ((g.data || [])[0] || {}).debug_img || null; }
-    }
-    rsKabar(R);
+    rsKabar(RS.run);
   } catch(e){ return; }
   // jangan menggambar ulang saat orang sedang mengetik di kartu (OTP / form akun)
   const el = document.getElementById("rs-kartu"), fokus = document.activeElement;
@@ -9265,6 +9262,11 @@ async function rsMuat(paksa){
       x.textContent = Math.floor(d / 60) + ":" + String(d % 60).padStart(2, "0"); }); }, 1000);
 }
 
+const MP = [
+  { k:"shopee", nama:"Shopee", warna:"#ee4d2d", huruf:"S" },
+  { k:"tiktok", nama:"TikTok Shop", warna:"#111111", huruf:"T" },
+  { k:"lazada", nama:"Lazada", warna:"#101a8c", huruf:"L" },
+];
 function rsGambar(){
   const el = document.getElementById("rs-kartu");
   if (!el) return;
@@ -9277,260 +9279,126 @@ function rsGambar(){
   const fileLain = RS.file.filter(f => f.jenis !== key).length;
   const toko = daftarToko();
   const dariDef = rsMundur(rsHariIni(), 14), sampaiDef = rsMundur(rsHariIni(), 1);
-  const A = RS.akun || {};
-  if (RS.form){ rsGambarAkun(el, A); return; }
-  const apiAktif = RS.api.filter(t => t.status === "aktif");
-  const bisaAmbil = apiAktif.length > 0 || (A.terhubung && A.aktif);
-  const apiBlok = `<div class="rs-api">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:${RS.api.length ? 10 : 0}px">
-        <span class="rs-ikon" aria-hidden="true">S</span>
-        <span style="flex:1;min-width:220px"><strong>Toko Shopee · API resmi</strong>
-          <br><span class="status">${RS.apiSiap ? "Tanpa login, OTP, atau captcha. Tiap toko cukup diizinkan sekali." + (RS.apiEnv === "test" ? " (lingkungan uji Shopee)" : "")
-            : "Menunggu App Shopee disetujui. Tombol aktif setelah Partner ID &amp; Key dipasang di Business Manager."}</span></span>
-        ${A.boleh_atur && !A.demo ? `<button type="button" class="btn primary" id="rs-api-hubung"${RS.apiSiap ? "" : " disabled"}>Hubungkan toko Shopee</button>` : ""}
+  const A = RS.akun || {}, boleh = A.boleh_atur && !A.demo;
+  const siap = RS.apiSiap || {};
+  const aktif = RS.api.filter(t => t.status === "aktif");
+  const blokMp = m => {
+    const daftar = RS.api.filter(t => t.platform === m.k), ok = !!(siap[m.k] && siap[m.k].siap);
+    return `<div class="rs-mp">
+      <div style="display:flex;gap:10px;align-items:center">
+        <span class="rs-ikon" style="background:${m.warna}" aria-hidden="true">${m.huruf}</span>
+        <span style="flex:1;min-width:0"><strong>${m.nama}</strong>
+          <br><span class="status">${!ok ? "Menunggu App disetujui" : daftar.length ? daftar.length + " toko terhubung" + (siap[m.k].lingkungan === "test" ? " · uji" : "") : "Belum ada toko"}</span></span>
       </div>
-      ${RS.api.map(t => { const ulang = t.status !== "aktif"; const hampir = !ulang && t.token_sampai && (new Date(t.token_sampai) - Date.now()) < 5 * 864e5; return `
-        <div class="rs-api-toko">
-          <span style="flex:1;min-width:200px"><strong>${esc(t.nama_toko || ("Toko " + t.shop_id))}</strong>
-            ${ulang ? `<span class="chip bad" style="margin-left:6px"><span class="dot"></span>Perlu dihubungkan ulang</span>` : `<span class="chip ok" style="margin-left:6px"><span class="dot"></span>Terhubung</span>`}
-            <br><span class="status">${t.ditarik_terakhir ? "Terakhir diambil " + esc(rsWaktu(t.ditarik_terakhir)) : "Belum pernah diambil"}${hampir ? " · izin berakhir " + esc(rsWaktu(t.token_sampai)) + " — jalankan Ambil sekarang supaya diperpanjang" : ""}${t.catatan ? " · " + esc(t.catatan) : ""}</span></span>
-          ${A.boleh_atur ? `<button type="button" class="btn ghost" data-rs-api-putus="${esc(t.shop_id)}" data-nama="${esc(t.nama_toko || t.shop_id)}">Putuskan</button>` : ""}
+      ${daftar.map(t => { const ulang = t.status !== "aktif"; const hampir = !ulang && t.token_sampai && (new Date(t.token_sampai) - Date.now()) < 5 * 864e5; return `
+        <div class="rs-mp-toko">
+          <span style="flex:1;min-width:0"><strong>${esc(t.nama_toko || t.toko_id)}</strong>
+            ${ulang ? `<span class="chip bad"><span class="dot"></span>Hubungkan ulang</span>` : ""}
+            <br><span class="status">${t.ditarik_terakhir ? "Diambil " + esc(rsWaktu(t.ditarik_terakhir)) : "Belum pernah diambil"}${hampir ? " · izin berakhir " + esc(rsWaktu(t.token_sampai)) : ""}${t.catatan ? " · " + esc(t.catatan) : ""}</span></span>
+          ${boleh ? `<button type="button" class="btn ghost kecil" data-mp-putus="${esc(t.toko_id)}" data-mp="${m.k}" data-nama="${esc(t.nama_toko || t.toko_id)}" aria-label="Putuskan ${esc(t.nama_toko || t.toko_id)}">Putuskan</button>` : ""}
         </div>`; }).join("")}
+      ${boleh ? `<button type="button" class="btn ${daftar.length ? "ghost" : "primary"}" data-mp-hubung="${m.k}" style="width:100%;box-sizing:border-box;justify-content:center;text-align:center;margin-top:auto"${ok ? "" : ` disabled title="Menunggu kredensial App ${m.nama} dipasang di Business Manager"`}>${daftar.length ? "+ Hubungkan toko lain" : "Hubungkan " + m.nama}</button>` : ""}
     </div>`;
+  };
   el.innerHTML = `
-    <div class="hd"><h2>Robot Shopee</h2>
-      ${st ? `<span class="chip ${st[1]}"><span class="dot"></span>${esc(st[0])}</span>` : `<span class="note">Belum pernah dijalankan</span>`}
-      <span class="note">Otomatis tiap Senin (14 hari terakhir) &amp; tanggal 3 (bulan lalu penuh)</span></div>
+    <div class="hd"><h2>Koneksi Marketplace</h2>
+      ${st ? `<span class="chip ${st[1]}"><span class="dot"></span>${esc(st[0])}</span>` : ""}
+      <span class="note">Data diambil otomatis tiap Senin (14 hari terakhir) &amp; tanggal 3 (bulan lalu penuh)</span></div>
     <div class="bd">
-      ${apiBlok}
-      ${A.terhubung ? `<div class="rs-akun">
-        <span class="rs-ikon" aria-hidden="true" style="background:var(--ink3)">S</span>
-        <span style="flex:1;min-width:200px"><span class="status">Cara lama · login sub akun (sering diblokir pemeriksaan anti-robot Shopee)</span><br><strong>${esc(A.username || "")}</strong>
-          ${A.aktif ? `<span class="chip ok" style="margin-left:6px"><span class="dot"></span>Terhubung</span>` : `<span class="chip bad" style="margin-left:6px"><span class="dot"></span>Dijeda</span>`}</span>
-        ${A.boleh_atur ? `<button type="button" class="btn ghost" id="rs-akun-ubah">Ganti akun / password</button>
-          <button type="button" class="btn ghost" id="rs-akun-jeda">${A.aktif ? "Jeda robot" : "Aktifkan lagi"}</button>` : ""}
-      </div>` : ""}
-      ${A.terhubung && !A.aktif && !apiAktif.length ? `<div class="warnbox">Robot sub akun sedang dijeda: jadwal otomatis dilewati.</div>` : ""}
-      ${R ? `<div class="status" style="margin-bottom:10px">${jalan ? "Sedang dijalankan" : "Terakhir"}: ${esc(R.mode === "eksplor" ? "uji login" : (R.jenis === "MANUAL" ? "manual" : R.jenis.toLowerCase()))}
-        · periode ${esc(fmtD(R.dari_tgl))}–${esc(fmtD(R.sampai_tgl))} · ${esc(rsWaktu(R.mulai || R.dibuat))}${R.oleh ? " · " + esc(R.oleh) : ""}</div>` : ""}
-      ${jalan && R.status !== "MENUNGGU_OTP" ? `<div class="rs-panel">
+      <div class="status" style="margin-bottom:12px">Klik <strong>Hubungkan</strong> → masuk ke akun marketplace di halaman resminya → klik <strong>Izinkan</strong>.
+        Password marketplace tidak pernah melewati Business Manager.${boleh ? "" : " Yang bisa menghubungkan: pemilik usaha atau pengguna dengan akses penuh Seller."}</div>
+      <div class="rs-mp-grid">${MP.map(blokMp).join("")}</div>
+      ${R ? `<div class="status" style="margin:12px 0 10px">${jalan ? "Sedang diambil" : "Terakhir diambil"}: ${esc(R.jenis === "MANUAL" ? "manual" : R.jenis.toLowerCase())}
+        · periode ${esc(fmtD(R.dari_tgl))}–${esc(fmtD(R.sampai_tgl))} · ${esc(rsWaktu(R.mulai || R.dibuat))}${R.oleh ? " · " + esc(R.oleh) : ""}</div>` : `<div style="height:12px"></div>`}
+      ${jalan ? `<div class="rs-panel">
         <span class="rs-putar" aria-hidden="true"></span>
-        <span style="flex:1;min-width:220px"><strong>${R.status === "ANTRE" ? "Menyiapkan robot di GitHub…" : "Robot sedang bekerja…"}</strong>
-          <br><span class="status">${esc(R.status === "ANTRE" ? "Biasanya 30–60 detik sebelum robot mulai." : (R.otp_pesan && /diterima robot/.test(R.otp_pesan) ? R.otp_pesan : (R.langkah || "Memulai…")))}
-          · berjalan <span data-rs-lama="${esc(R.mulai || R.dibuat)}">${rsLama(R.mulai || R.dibuat)}</span></span></span>
+        <span style="flex:1;min-width:220px"><strong>${R.status === "ANTRE" ? "Menyiapkan…" : "Mengambil data…"}</strong>
+          <br><span class="status">${esc(R.langkah || "Memulai…")} · <span data-rs-lama="${esc(R.mulai || R.dibuat)}">${rsLama(R.mulai || R.dibuat)}</span></span></span>
         <button type="button" class="btn ghost" id="rs-batal">Batalkan</button></div>` : ""}
-      ${R && R.status === "MENUNGGU_OTP" ? (RS.otpTerkirim === (R.otp_minta || "x") ? `<div class="rs-panel">
-        <span class="rs-putar" aria-hidden="true"></span>
-        <span style="flex:1"><strong>Kode terkirim ✓</strong><br><span class="status">Robot sedang memasukkan kode ke Shopee…</span></span>
-        <button type="button" class="btn ghost" id="rs-batal">Batalkan</button></div>` : `<div class="rs-otp">
-        <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
-          <span style="flex:1;min-width:240px"><strong style="font-size:14px">🔔 Shopee meminta kode OTP</strong>
-            <br><span>${esc(R.otp_pesan || "Kode dikirim ke nomor/email sub akun.")}</span>
-            <br><span class="status">Sisa waktu <strong data-rs-sisa="${esc(R.otp_minta || R.dibuat)}">10:00</strong> · Pakai kode <strong>terbaru</strong>. Kode lama tidak berlaku.</span></span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-          <input id="rs-otp" inputmode="numeric" autocomplete="one-time-code" placeholder="6 angka" maxlength="8" style="width:150px;font-size:18px;letter-spacing:4px;text-align:center">
-          <button type="button" class="btn primary" id="rs-otp-kirim">Kirim kode</button>
-          <button type="button" class="btn ghost" id="rs-otp-ulang"${R.otp_aksi === "ulang" ? " disabled" : ""}>${R.otp_aksi === "ulang" ? "Meminta kode baru…" : "Kirim ulang kode"}</button>
-          ${RS.img ? `<button type="button" class="btn ghost" id="rs-lihat">${RS.lihatImg ? "Sembunyikan layar Shopee" : "Lihat layar Shopee"}</button>` : ""}
-          <span style="flex:1"></span><button type="button" class="btn ghost" id="rs-batal">Batalkan</button>
-        </div>
-        ${RS.img && RS.lihatImg ? `<img class="rs-layar" src="${RS.img}" alt="Layar Shopee yang dilihat robot">` : ""}
-        <div class="status" style="margin-top:8px">Kode tidak masuk? Kode dikirim Shopee ke nomor HP / email yang terdaftar di <strong>sub akun</strong> (bisa berbeda dengan nomor Anda). Tunggu ±1 menit lalu klik <strong>Kirim ulang kode</strong>.</div>
-      </div>`) : ""}
       ${R && !jalan && R.hasil ? `<div class="${R.status === "BERHASIL" ? "rs-hasil ok" : "rs-hasil bad"}">
-        <strong>${R.status === "BERHASIL" ? "✓ Berhasil" : R.status === "SEBAGIAN" ? "Sebagian berhasil" : "✗ Berhenti"}</strong> · ${esc(R.hasil)}
-        ${RS.img && R.status !== "BERHASIL" ? `<br><button type="button" class="btn ghost" id="rs-lihat" style="margin-top:6px">${RS.lihatImg ? "Sembunyikan layar terakhir" : "Lihat layar terakhir robot"}</button>
-          ${RS.lihatImg ? `<img class="rs-layar" src="${RS.img}" alt="Layar terakhir robot">` : ""}` : ""}</div>` : ""}
-      ${belumPeta.length ? `<div class="hint"><strong>${belumPeta.length} toko Shopee baru ditemukan.</strong>
-        Pilih nama tokonya di buku ini supaya datanya masuk ke toko &amp; badan usaha yang benar. File toko ini ditahan sampai dipilih.
+        <strong>${R.status === "BERHASIL" ? "✓ Berhasil" : R.status === "SEBAGIAN" ? "Sebagian berhasil" : "✗ Berhenti"}</strong> · ${esc(R.hasil)}</div>` : ""}
+      ${belumPeta.length ? `<div class="hint"><strong>${belumPeta.length} toko marketplace belum dipetakan.</strong>
+        Pilih nama tokonya di buku ini supaya datanya masuk ke toko &amp; badan usaha yang benar.
         ${belumPeta.map(p => `<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
           <span style="min-width:180px"><strong>${esc(p.nama_shopee)}</strong></span>
           <input list="rs-daftar-toko" data-rs-peta="${esc(p.nama_shopee)}" placeholder="Nama toko di Seller" value="${esc(toko.find(t => t.toLowerCase() === p.nama_shopee.toLowerCase()) || "")}" style="min-width:200px">
           <button type="button" class="btn" data-rs-simpan="${esc(p.nama_shopee)}">Simpan</button>
-          <button type="button" class="btn ghost" data-rs-abaikan="${esc(p.nama_shopee)}" title="Toko ini tidak diambil robot">Abaikan toko</button></div>`).join("")}
+          <button type="button" class="btn ghost" data-rs-abaikan="${esc(p.nama_shopee)}">Abaikan toko</button></div>`).join("")}
         <datalist id="rs-daftar-toko">${toko.map(t => `<option value="${esc(t)}">`).join("")}</datalist></div>` : ""}
       ${fileIni.length ? `<div class="tablewrap" style="margin:10px 0"><table><thead><tr><th>Toko</th><th>Periode</th><th>Diambil</th><th></th></tr></thead><tbody>
         ${fileIni.map(f => { const ts = rsTokoSeller(f.nama_shopee); return `<tr>
-          <td><strong>${esc(ts || f.nama_shopee)}</strong>${ts && ts !== f.nama_shopee ? `<div class="status">Shopee: ${esc(f.nama_shopee)}</div>` : ""}</td>
+          <td><strong>${esc(ts || f.nama_shopee)}</strong>${ts && ts !== f.nama_shopee ? `<div class="status">${esc(f.nama_shopee)}</div>` : ""}</td>
           <td>${esc(fmtD(f.dari_tgl))} – ${esc(fmtD(f.sampai_tgl))}</td><td class="status">${esc(rsWaktu(f.dibuat))}</td>
           <td style="text-align:right;white-space:nowrap">${ts ? `<button type="button" class="btn primary" data-rs-impor="${esc(f.id)}">Impor</button>` : `<span class="status">pilih tokonya dulu</span>`}
-            <button type="button" class="btn ghost" data-rs-lewati="${esc(f.id)}" title="Tandai tidak perlu diimpor">Lewati</button></td></tr>`; }).join("")}
+            <button type="button" class="btn ghost" data-rs-lewati="${esc(f.id)}">Lewati</button></td></tr>`; }).join("")}
         </tbody></table></div>`
-        : `<div class="status" style="margin:6px 0 10px">Tidak ada file ${key === "mutasi" ? "mutasi saldo" : "penghasilan"} baru dari robot.</div>`}
+        : (aktif.length ? `<div class="status" style="margin:6px 0 10px">Tidak ada file ${key === "mutasi" ? "mutasi saldo" : "penghasilan"} baru.</div>` : "")}
       ${fileLain ? `<div class="status" style="margin-bottom:10px">${fileLain} file ${key === "mutasi" ? "penghasilan" : "mutasi saldo"} menunggu di halaman ${key === "mutasi" ? "Penghasilan Marketplace" : "Mutasi Saldo"}.</div>` : ""}
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      ${aktif.length ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span class="status" style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">Periode
           <input type="date" id="rs-dari" value="${dariDef}" aria-label="Dari tanggal" style="width:auto"> –
           <input type="date" id="rs-sampai" value="${sampaiDef}" aria-label="Sampai tanggal" style="width:auto"></span>
-        ${jalan ? `<span class="status">Tombol Ambil sekarang &amp; Uji login aktif lagi setelah robot selesai (atau klik Batalkan).</span>` : `
-        <button type="button" class="btn primary" id="rs-jalan"${bisaAmbil ? "" : " disabled"} title="${bisaAmbil ? "" : "Hubungkan toko Shopee dulu"}">Ambil sekarang</button>
-        ${A.terhubung && A.aktif && !apiAktif.length ? `<button type="button" class="btn ghost" id="rs-uji" title="Login, baca daftar toko, buka toko pertama sampai Penghasilan Saya — tanpa mengambil data">Uji login</button>` : ""}`}
-        ${R && R.log_url ? `<a class="btn ghost" href="${esc(R.log_url)}" target="_blank" rel="noopener">Log robot</a>` : ""}
-      </div>
+        ${jalan ? `<span class="status">Bisa diambil lagi setelah selesai.</span>` : `<button type="button" class="btn primary" id="rs-jalan">Ambil sekarang</button>`}
+      </div>` : ""}
     </div>`;
   const $ = s => el.querySelector(s);
-  const jalankan = async (mode, b) => {
+  const bJalan = $("#rs-jalan");
+  if (bJalan) bJalan.onclick = async () => {
     const d1 = $("#rs-dari").value, d2 = $("#rs-sampai").value;
     if (!d1 || !d2 || d2 < d1){ pesan("Periode belum benar."); return; }
     rsMintaIzinNotif();
-    b.disabled = true; b.textContent = "Menyalakan robot…";
-    const { error } = await SB.rpc("shopee_robot_jalankan", { p_company: AKUN.usahaId, p_dari: d1, p_sampai: d2, p_mode: mode });
-    if (error){ pesan(error.message, "Robot Shopee"); rsGambar(); return; }
-    rsToast(mode === "eksplor" ? "Uji login dimulai. Siapkan HP untuk kode OTP." : "Robot Shopee mulai mengambil data.", "");
+    bJalan.disabled = true; bJalan.textContent = "Memulai…";
+    const { error } = await SB.rpc("shopee_robot_jalankan", { p_company: AKUN.usahaId, p_dari: d1, p_sampai: d2, p_mode: "biasa" });
+    if (error){ pesan(error.message, "Koneksi Marketplace"); rsGambar(); return; }
+    rsToast("Mulai mengambil data marketplace.", "");
     rsMuat(true);
   };
-  const bJalan = $("#rs-jalan"), bUji = $("#rs-uji");
-  if (bJalan) bJalan.onclick = () => jalankan("biasa", bJalan);
-  if (bUji) bUji.onclick = () => jalankan("eksplor", bUji);
-  el.querySelectorAll("#rs-batal").forEach(b => b.onclick = async () => {
-    if (!await konfirmasi("Hentikan robot yang sedang berjalan? File yang sudah terambil tetap tersimpan.", "Batalkan robot", "Lanjutkan")) return;
-    b.disabled = true;
+  const batal = $("#rs-batal");
+  if (batal) batal.onclick = async () => {
+    if (!await konfirmasi("Hentikan pengambilan data yang sedang berjalan?", "Hentikan", "Lanjutkan")) return;
+    batal.disabled = true;
     const { data, error } = await SB.rpc("shopee_robot_batal", { p_run: R.id });
-    if (error || !data){ pesan((error && error.message) || "Robot sudah tidak berjalan.", "Robot Shopee"); }
+    if (error || !data) pesan((error && error.message) || "Sudah tidak berjalan.", "Koneksi Marketplace");
     rsMuat(true);
-  });
-  const hubung = $("#rs-api-hubung");
-  if (hubung) hubung.onclick = async () => {
-    hubung.disabled = true; hubung.textContent = "Membuka Shopee…";
-    const { data, error } = await SB.functions.invoke("shopee-api", { body: { aksi: "tautan", company: AKUN.usahaId } });
+  };
+  el.querySelectorAll("[data-mp-hubung]").forEach(b => b.onclick = async () => {
+    const mp = MP.find(m => m.k === b.dataset.mpHubung);
+    b.disabled = true; b.textContent = "Membuka " + mp.nama + "…";
+    const { data, error } = await SB.functions.invoke(mp.k + "-api", { body: { aksi: "tautan", platform: mp.k, company: AKUN.usahaId } });
     const url = data && data.url;
     if (error || !url){
       let m = (data && data.error) || "";
       try { if (!m && error && error.context) m = (await error.context.json()).error; } catch(e){}
-      pesan(m || (error && error.message) || "Tautan otorisasi gagal dibuat.", "Hubungkan toko Shopee"); rsGambar(); return;
+      pesan(m || (error && error.message) || "Tautan otorisasi gagal dibuat.", "Hubungkan " + mp.nama); rsGambar(); return;
     }
-    location.href = url;      // login Shopee → Izinkan → kembali ke halaman ini
-  };
-  el.querySelectorAll("[data-rs-api-putus]").forEach(b => b.onclick = async () => {
-    if (!await konfirmasi(`Putuskan toko "${b.dataset.nama}" dari Business Manager? Robot berhenti mengambil data toko ini. Data yang sudah diimpor tetap aman, dan toko bisa dihubungkan lagi kapan saja.`, "Putuskan", "Batal")) return;
-    const { error } = await SB.rpc("shopee_api_putus", { p_company: AKUN.usahaId, p_shop: Number(b.dataset.rsApiPutus) });
-    if (error){ pesan(error.message, "Robot Shopee"); return; }
+    location.href = url;      // masuk ke marketplace → Izinkan → kembali ke halaman ini
+  });
+  el.querySelectorAll("[data-mp-putus]").forEach(b => b.onclick = async () => {
+    if (!await konfirmasi(`Putuskan "${b.dataset.nama}" dari Business Manager? Pengambilan data toko ini berhenti. Data yang sudah diimpor tetap aman, dan toko bisa dihubungkan lagi kapan saja.`, "Putuskan", "Batal")) return;
+    const { error } = await SB.rpc("mp_api_putus", { p_company: AKUN.usahaId, p_platform: b.dataset.mp, p_toko: b.dataset.mpPutus });
+    if (error){ pesan(error.message, "Koneksi Marketplace"); return; }
     rsToast("Toko diputus.", ""); rsMuat(true);
   });
-  const lihat = $("#rs-lihat");
-  if (lihat) lihat.onclick = () => { RS.lihatImg = !RS.lihatImg; rsGambar(); };
-  const ulang = $("#rs-otp-ulang");
-  if (ulang) ulang.onclick = async () => {
-    ulang.disabled = true; ulang.textContent = "Meminta kode baru…";
-    const { data, error } = await SB.rpc("shopee_robot_otp_ulang", { p_run: R.id });
-    if (error || !data){ pesan((error && error.message) || "Robot sudah tidak menunggu kode.", "Robot Shopee"); }
-    else rsToast("Permintaan kirim ulang diteruskan ke Shopee. Tunggu SMS/WA ±1 menit.", "");
-    rsMuat(true);
-  };
-  const otpIn = $("#rs-otp");
-  if (otpIn) otpIn.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); $("#rs-otp-kirim").click(); } };
-  const ubah = $("#rs-akun-ubah");
-  if (ubah) ubah.onclick = () => { RS.form = true; rsGambar(); };
-  const jeda = $("#rs-akun-jeda");
-  if (jeda) jeda.onclick = async () => {
-    if (A.aktif && !await konfirmasi("Robot Shopee dijeda: jadwal Senin & tanggal 3 dilewati sampai diaktifkan lagi. Akun tetap tersimpan.", "Jeda robot", "Batal")) return;
-    jeda.disabled = true;
-    const { error } = await SB.rpc("shopee_akun_atur", { p_company: AKUN.usahaId, p_aktif: !A.aktif });
-    if (error){ pesan(error.message, "Robot Shopee"); jeda.disabled = false; return; }
-    rsMuat(true);
-  };
-  const otp = $("#rs-otp-kirim");
-  if (otp) otp.onclick = async () => {
-    const k = ($("#rs-otp").value || "").trim();
-    if (!/^\d{4,8}$/.test(k)){ pesan("Kode OTP biasanya 6 angka."); return; }
-    const { data, error } = await SB.rpc("shopee_robot_otp", { p_run: R.id, p_kode: k });
-    if (error || !data){ pesan((error && error.message) || "Kode tidak terkirim — mungkin robot sudah tidak menunggu.", "Robot Shopee"); return; }
-    RS.otpTerkirim = R.otp_minta || "x";
-    document.activeElement && document.activeElement.blur && document.activeElement.blur();
-    rsToast("Kode terkirim ke robot. Menunggu Shopee memverifikasi…", "");
-    rsGambar(); rsMuat(true);
-  };
   el.querySelectorAll("[data-rs-simpan]").forEach(b => b.onclick = async () => {
     const nama = b.dataset.rsSimpan;
     const v = (el.querySelector(`[data-rs-peta="${CSS.escape(nama)}"]`) || {}).value || "";
     if (!v.trim()){ pesan("Tulis atau pilih nama toko di buku ini."); return; }
     const { error } = await SB.rpc("shopee_toko_atur", { p_company: AKUN.usahaId, p_nama_shopee: nama, p_toko: v.trim(), p_aktif: true });
-    if (error){ pesan(error.message, "Robot Shopee"); return; }
+    if (error){ pesan(error.message, "Koneksi Marketplace"); return; }
     rsMuat(true);
   });
   el.querySelectorAll("[data-rs-abaikan]").forEach(b => b.onclick = async () => {
-    if (!await konfirmasi(`Toko Shopee "${b.dataset.rsAbaikan}" tidak akan diambil robot lagi. Bisa diaktifkan kembali kapan saja.`, "Abaikan toko", "Batal")) return;
+    if (!await konfirmasi(`Toko "${b.dataset.rsAbaikan}" tidak akan diambil lagi. Bisa diaktifkan kembali kapan saja.`, "Abaikan toko", "Batal")) return;
     const { error } = await SB.rpc("shopee_toko_atur", { p_company: AKUN.usahaId, p_nama_shopee: b.dataset.rsAbaikan, p_toko: null, p_aktif: false });
-    if (error){ pesan(error.message, "Robot Shopee"); return; }
+    if (error){ pesan(error.message, "Koneksi Marketplace"); return; }
     rsMuat(true);
   });
   el.querySelectorAll("[data-rs-lewati]").forEach(b => b.onclick = async () => {
     const { error } = await SB.rpc("shopee_file_tandai", { p_id: b.dataset.rsLewati, p_status: "dilewati" });
-    if (error){ pesan(error.message, "Robot Shopee"); return; }
+    if (error){ pesan(error.message, "Koneksi Marketplace"); return; }
     rsMuat(true);
   });
   el.querySelectorAll("[data-rs-impor]").forEach(b => b.onclick = () => rsImpor(b.dataset.rsImpor, b));
-}
-
-/* Kartu saat akun Shopee belum dihubungkan, atau saat pemilik mengganti akun / password */
-function rsGambarAkun(el, A){
-  const ganti = !!A.terhubung;
-  const langkah = `<ol class="rs-langkah">
-      <li><strong>Buat sub akun</strong> di Shopee Seller Centre (Akun Utama → Sub Akun) yang bisa membuka semua toko Anda.</li>
-      <li><strong>Hubungkan di sini</strong>: isi nama login sub akun &amp; password-nya.</li>
-      <li><strong>Klik Uji login.</strong> Login pertama biasanya minta OTP; kodenya Anda ketik di kartu ini.</li></ol>`;
-  let isi;
-  if (A.demo){
-    isi = `<div class="hint" style="margin:0">Akun demo tidak bisa dihubungkan ke Shopee. Robot Shopee hanya untuk usaha sungguhan.</div>${langkah}`;
-  } else if (!A.boleh_atur){
-    isi = `<div class="hint" style="margin:0">Robot Shopee belum dihubungkan. Yang bisa menghubungkan: <strong>pemilik usaha</strong> atau pengguna dengan <strong>akses penuh Seller</strong> (hak Pengaturan).</div>`;
-  } else {
-    isi = `${ganti ? "" : `<p class="status" style="margin:0 0 12px">Robot mengambil Laporan Penghasilan (Sudah Dilepas) &amp; mutasi Saldo Penjual
-        semua toko di sub akun Anda tiap Senin dan tanggal 3, lalu menitipkannya di sini untuk diimpor satu klik.</p>${langkah}`}
-      <form id="rs-akun-form" autocomplete="off" style="margin-top:14px">
-        <div class="grid2">
-          <div class="field"><label for="rs-user">Nama login sub akun</label>
-            <input id="rs-user" autocomplete="off" spellcheck="false" placeholder="NamaUtama:namasub" value="${esc(A.username || "")}">
-            <span class="status">Persis seperti di kotak "Log In Akun Utama/Sub Akun", termasuk titik dua.</span></div>
-          ${kotakSandi("rs-sandi", "Password sub akun", "new-password", ganti ? "Kosongkan bila tidak diganti" : "Password sub akun Shopee")}
-        </div>
-        <div class="status" style="margin:10px 0 12px">🔒 Password disimpan terenkripsi di brankas Business Manager dan tidak bisa dilihat lagi oleh siapa pun — hanya bisa diganti.
-          Hanya robot yang memakainya, dan hanya untuk usaha ini.</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <button type="submit" class="btn primary" id="rs-akun-simpan">${ganti ? "Simpan perubahan" : "Hubungkan akun Shopee"}</button>
-          ${ganti ? `<button type="button" class="btn ghost" id="rs-akun-batal">Batal</button>
-            <span style="flex:1"></span><button type="button" class="btn ghost" id="rs-akun-putus" style="color:var(--neg)">Putuskan akun</button>` : ""}
-        </div>
-      </form>`;
-  }
-  el.innerHTML = `<div class="hd"><h2>Robot Shopee</h2>
-      <span class="note">${ganti ? "Ganti akun / password sub akun" : "Belum terhubung"}</span></div>
-    <div class="bd">${isi}</div>`;
-  const $ = s => el.querySelector(s);
-  el.querySelectorAll("[data-mata]").forEach(b => b.onclick = () => {
-    const inp = document.getElementById(b.dataset.mata); if (!inp) return;
-    const tampil = inp.type === "password";
-    inp.type = tampil ? "text" : "password";
-    b.setAttribute("aria-pressed", tampil ? "true" : "false");
-    const t = tampil ? "Sembunyikan kata sandi" : "Tampilkan kata sandi"; b.setAttribute("aria-label", t); b.title = t;
-    const buka = b.querySelector(".buka"), tutup = b.querySelector(".tutup");
-    if (buka && tutup){ buka.hidden = tampil; tutup.hidden = !tampil; }
-    inp.focus();
-  });
-  const batal = $("#rs-akun-batal");
-  if (batal) batal.onclick = () => { RS.form = false; rsGambar(); };
-  const putus = $("#rs-akun-putus");
-  if (putus) putus.onclick = async () => {
-    if (!await konfirmasi("Akun Shopee dilepas dari usaha ini dan password-nya dihapus dari brankas. Robot berhenti sampai akun dihubungkan lagi. File & data yang sudah ada tetap aman.", "Putuskan akun", "Batal")) return;
-    const { error } = await SB.rpc("shopee_akun_putus", { p_company: AKUN.usahaId });
-    if (error){ pesan(error.message, "Robot Shopee"); return; }
-    RS.form = false; rsMuat(true);
-  };
-  const form = $("#rs-akun-form");
-  if (form) form.onsubmit = async ev => {
-    ev.preventDefault();
-    const u = ($("#rs-user").value || "").trim(), p = $("#rs-sandi").value || "";
-    if (!/^[^:\s]+:[^:\s]+$/.test(u)){ pesan("Nama login sub akun harus berformat NamaUtama:namasub (ada titik dua), contoh TokoSaya:robot."); $("#rs-user").focus(); return; }
-    if (!ganti && !p){ pesan("Isi password sub akun Shopee."); $("#rs-sandi").focus(); return; }
-    const b = $("#rs-akun-simpan"), lbl = b.textContent; b.disabled = true; b.textContent = "Menyimpan…";
-    const { error } = await SB.rpc("shopee_akun_simpan", { p_company: AKUN.usahaId, p_user: u, p_sandi: p });
-    $("#rs-sandi").value = "";
-    if (error){ pesan(error.message, "Robot Shopee"); b.disabled = false; b.textContent = lbl; return; }
-    RS.form = false;
-    await rsMuat(true);
-    pesan(ganti ? "Akun Shopee diperbarui." : "Akun Shopee terhubung. Klik Uji login untuk mencoba — siapkan HP untuk kode OTP.", "Robot Shopee");
-  };
 }
 
 async function rsImpor(id, tombol){
@@ -9549,7 +9417,7 @@ async function rsImpor(id, tombol){
     IMP.toko = toko; IMP.plat = "shopee"; IMP.robotFile = f.id;
     await readFiles([berkas]);
   } catch(e){
-    pesan("File robot tidak bisa dibuka: " + (e.message || e), "Robot Shopee");
+    pesan("File tidak bisa dibuka: " + (e.message || e), "Koneksi Marketplace");
   } finally { tombol.disabled = false; tombol.textContent = label; }
 }
 async function rsTandai(id, status){
